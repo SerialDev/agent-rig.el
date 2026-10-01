@@ -3,7 +3,7 @@
 (require 'json)
 (require 'subr-x)
 
-(defvar-local agent-rig-activity--generation 0)
+(defvar-local agent-rig-activity--generation nil)
 (defvar-local agent-rig-activity--timer nil)
 (defvar-local agent-rig-activity--started 0)
 (defvar-local agent-rig-activity--processes nil)
@@ -40,6 +40,8 @@
                     (alist-get 'team session) (alist-get 'seat session) (alist-get 'provider session)
                     (alist-get 'status session) (or (alist-get 'pid session) "unknown")
                     (or (alist-get 'command session) "unknown"))
+            (format "Snapshot: %s   [g] refresh\n"
+                    (format-time-string "%H:%M:%S" (seconds-to-time agent-rig-activity--started)))
             (format "Native activity: %s\nSubagents: unavailable from this provider's process inventory\n\n"
                     (or (alist-get 'native agent-rig-activity--results) "unavailable"))
             (propertize "OS CHILD PROCESSES (not a subagent count)\n" 'face 'agent-rig-section)
@@ -54,16 +56,19 @@
         (generation agent-rig-activity--generation)
         (output (generate-new-buffer " *rig activity probe*")))
     (condition-case err
-        (push (make-process
+        (let ((process (make-process
                :name "rig-activity" :buffer output :command command :noquery t
                :sentinel
                (lambda (process _event)
                  (when (memq (process-status process) '(exit signal))
+                   (when (timerp (process-get process 'agent-rig-timeout))
+                     (cancel-timer (process-get process 'agent-rig-timeout)))
                    (unwind-protect
                        (when (buffer-live-p target)
                          (with-current-buffer target
                            (setq agent-rig-activity--processes (delq process agent-rig-activity--processes))
-                           (when (= generation agent-rig-activity--generation)
+                           (when (and (derived-mode-p 'agent-rig-activity-mode)
+                                      (eq generation agent-rig-activity--generation))
                              (setf (alist-get key agent-rig-activity--results)
                                    (if (= (process-exit-status process) 0)
                                        (condition-case nil
@@ -71,15 +76,19 @@
                                          (error "Unavailable (unsupported response)\n"))
                                      "Unavailable (probe failed)\n"))
                              (agent-rig-activity--render))))
-                     (kill-buffer output)))))
-              agent-rig-activity--processes)
+                     (kill-buffer output)))))))
+          (push process agent-rig-activity--processes)
+          (process-put process 'agent-rig-timeout
+                       (run-at-time 10 nil
+                                    (lambda ()
+                                      (when (process-live-p process) (delete-process process))))))
       (error (kill-buffer output)
              (setf (alist-get key agent-rig-activity--results) (error-message-string err))))))
 
 (defun agent-rig-activity-refresh ()
   (interactive)
   (agent-rig-activity--cancel)
-  (cl-incf agent-rig-activity--generation)
+  (setq agent-rig-activity--generation (list nil))
   (setq agent-rig-activity--started (float-time)
         agent-rig-activity--session (agent-rig--select)
         agent-rig-activity--results nil)
@@ -109,6 +118,7 @@
     (agent-rig-activity--render)))
 
 (defun agent-rig-activity--cancel ()
+  (setq agent-rig-activity--generation nil)
   (dolist (process agent-rig-activity--processes)
     (when (process-live-p process) (delete-process process)))
   (setq agent-rig-activity--processes nil))
@@ -116,10 +126,16 @@
 (defun agent-rig-activity--tick (buffer)
   (when (and (buffer-live-p buffer) (get-buffer-window buffer t))
     (with-current-buffer buffer
-      (when (or (null agent-rig-activity--processes)
-                (> (- (float-time) agent-rig-activity--started) 10))
+      (when (and (derived-mode-p 'agent-rig-activity-mode)
+                 (or (null agent-rig-activity--processes)
+                     (> (- (float-time) agent-rig-activity--started) 10)))
         (condition-case err (agent-rig-activity-refresh)
-          (error (setq header-line-format (error-message-string err))))))))
+          (error
+           (agent-rig-activity--stop)
+           (setq header-line-format (concat "Activity stopped: " (error-message-string err)))
+           (let ((inhibit-read-only t))
+             (goto-char (point-min))
+             (insert "STALE SNAPSHOT: " (error-message-string err) "\n\n"))))))))
 
 (defun agent-rig-activity--stop ()
   (when (timerp agent-rig-activity--timer) (cancel-timer agent-rig-activity--timer))
@@ -140,7 +156,7 @@
   (add-hook 'kill-buffer-hook #'agent-rig-activity--stop nil t)
   (add-hook 'change-major-mode-hook #'agent-rig-activity--stop nil t)
   (setq agent-rig-activity--timer
-        (run-with-idle-timer 3 t #'agent-rig-activity--tick (current-buffer))))
+        (run-at-time 3 3 #'agent-rig-activity--tick (current-buffer))))
 
 (defun agent-rig-activity ()
   (interactive)
