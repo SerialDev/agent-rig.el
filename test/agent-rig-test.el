@@ -8,7 +8,11 @@
                        (error
                         (message "tmux inventory: %S"
                                  (agent-rig-tmux--call "list-panes" "-a" "-F"
-                                                      "#{session_name}|#{pane_id}|#{pane_dead}|#{@agent-rig}"))
+                                                      "#{session_name}|#{pane_id}|#{pane_dead}|#{@agent-rig}|#{bracket_paste_flag}|#{pane_start_command}"))
+                        (dolist (session (agent-rig-tmux-sessions))
+                          (message "tmux history: %S"
+                                   (agent-rig-tmux--call "capture-pane" "-p" "-S" "-"
+                                                        "-t" (alist-get 'pane session))))
                         (signal (car failure) (cdr failure))))
        (ignore-errors (agent-rig-tmux--run "kill-server")))))
 
@@ -148,7 +152,7 @@
      (let ((session (car (agent-rig-tmux-sessions))))
        (should (equal (alist-get 'session session) id))
        (should (equal (alist-get 'exit-code session) "7"))
-       (should (string-match-p "failure" (agent-rig-tmux--run "capture-pane" "-p" "-t"
+       (should (string-match-p "failure" (agent-rig-tmux--run "capture-pane" "-p" "-S" "-" "-t"
                                                                           (alist-get 'pane session))))))))
 
 (ert-deftest agent-rig-preserves-arguments-and-multiline-paste ()
@@ -178,4 +182,86 @@
                      (equal (buffer-string) (concat literal "\n\033[200~" text "\033[201~"))))))
            (should-not (file-exists-p (expand-file-name "SHOULD_NOT_EXIST" directory)))
            (should-not (file-exists-p (expand-file-name "ALSO_NOT_CREATED" directory))))
+       (when (file-exists-p output)
+         (message "fixture received: %S" (with-temp-buffer (insert-file-contents output) (buffer-string))))
        (delete-directory directory t)))))
+
+(ert-deftest agent-rig-dashboard-keeps-project-context-and-filters ()
+  (let ((agent-rig-refresh-interval nil)
+        (directory (file-name-as-directory (file-truename temporary-file-directory))))
+    (with-temp-buffer
+      (agent-rig-mode)
+      (setq-local agent-rig--project-directory directory)
+      (let ((sessions `(((session . "one") (team . "team") (seat . "one")
+                         (provider . "codex") (status . "running") (directory . ,directory))
+                        ((session . "two") (team . "team") (seat . "two")
+                         (provider . "claude-code") (status . "running") (directory . "/other/")))))
+        (cl-letf (((symbol-function 'agent-rig-tmux-sessions) (lambda () sessions)))
+          (agent-rig-refresh)
+          (should (equal (mapcar #'car tabulated-list-entries) '("one")))
+          (should (equal (agent-rig--directory) directory))
+          (agent-rig-toggle-projects)
+          (should (= (length tabulated-list-entries) 2)))))))
+
+(ert-deftest agent-rig-empty-dashboard-explains-next-action ()
+  (let ((agent-rig-refresh-interval nil))
+    (with-temp-buffer
+      (agent-rig-mode)
+      (cl-letf (((symbol-function 'agent-rig-tmux-sessions) (lambda () nil)))
+        (agent-rig-refresh)
+        (should (string-match-p "Launch an agent" (buffer-string)))
+        (agent-rig-refresh)
+        (goto-char (point-min))
+        (should (= 1 (how-many "Launch an agent" (point-min) (point-max))))))))
+
+(ert-deftest agent-rig-context-identifies-file-lines-and-unsaved-state ()
+  (with-temp-buffer
+    (insert "first\nsecond\nthird\n")
+    (setq buffer-file-name "/tmp/project/example.el")
+    (setq-local agent-rig--project-directory "/tmp/project/")
+    (should (equal (agent-rig--context 7 14)
+                   "File: example.el\nLines: 2-2\nBuffer has unsaved changes: yes\n\nsecond\n"))))
+
+(ert-deftest agent-rig-terminal-map-preserves-user-navigation ()
+  (let ((agent-rig--source-window (selected-window))
+        (session '((session . "ar-test") (directory . "/tmp/")
+                   (team . "team") (seat . "seat") (provider . "codex"))))
+    (with-temp-buffer
+      (let ((map (make-sparse-keymap)))
+        (define-key map (kbd "M-w") #'other-window)
+        (use-local-map map))
+      (cl-letf (((symbol-function 'agent-rig--display) #'ignore))
+        (agent-rig--prepare-terminal (current-buffer) session))
+      (should (eq (key-binding (kbd "M-w")) #'other-window))
+      (should (eq (key-binding (kbd "C-c a")) #'agent-rig))
+      (should (eq (key-binding (kbd "C-c C-o")) #'agent-rig-return-to-code))
+      (should (equal agent-rig--terminal-session "ar-test")))))
+
+(ert-deftest agent-rig-dashboard-cancels-its-timer-on-kill ()
+  (let ((buffer (generate-new-buffer " *agent-rig-timer*"))
+        (agent-rig-refresh-interval 3) timer)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (agent-rig-mode)
+            (setq timer agent-rig--refresh-timer))
+          (should (timerp timer))
+          (kill-buffer buffer)
+          (should-not (memq timer timer-idle-list)))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest agent-rig-prompt-composition-preserves-source-and-project ()
+  (let ((source (selected-window)) (agent-rig--source-window nil) composed
+        (session '((session . "ar-test") (directory . "/tmp/")
+                   (team . "team") (seat . "seat") (provider . "codex"))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-rig--display) (lambda (buffer) (setq composed buffer))))
+          (agent-rig--compose (list session) "hello")
+          (should (eq agent-rig--source-window source))
+          (with-current-buffer composed
+            (should (derived-mode-p 'agent-rig-prompt-mode))
+            (should (equal default-directory "/tmp/"))
+            (should (equal agent-rig--prompt-targets '("ar-test")))
+            (should (equal (buffer-string) "hello"))
+            (should (eq (key-binding (kbd "C-c C-c")) #'agent-rig-paste-prompt))))
+      (when (buffer-live-p composed) (kill-buffer composed)))))
