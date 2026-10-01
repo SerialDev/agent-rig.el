@@ -10,6 +10,31 @@
 (defvar-local agent-rig-activity--session nil)
 (defvar-local agent-rig-activity--results nil)
 
+(defun agent-rig-activity--native-record (session)
+  (when (and (equal (alist-get 'provider session) "claude-code")
+             (equal (alist-get 'status session) "running")
+             (stringp (alist-get 'pid session))
+             (string-match-p "\\`[0-9]+\\'" (alist-get 'pid session)))
+    (condition-case nil
+        (let* ((pid (string-to-number (alist-get 'pid session)))
+               (file (expand-file-name (format "sessions/%s.json" pid)
+                                       (or (getenv "CLAUDE_CONFIG_DIR") "~/.claude/")))
+               (size (file-attribute-size (file-attributes file)))
+               (json-object-type 'alist) (json-array-type 'list) (json-key-type 'symbol)
+               (record (when (and size (< size 65536)) (json-read-file file)))
+               (start (alist-get 'start (process-attributes pid)))
+               (reported (alist-get 'startedAt record))
+               (status (alist-get 'status record)))
+          (when (and (equal pid (alist-get 'pid record))
+                     start (numberp reported)
+                     (>= reported (* 1000 (float-time start)))
+                     (<= reported (* 1000 (float-time)))
+                     (equal (file-truename (directory-file-name (alist-get 'directory session)))
+                            (file-truename (directory-file-name (alist-get 'cwd record))))
+                     (member status '("idle" "busy" "waiting" "shell")))
+            record))
+      (error nil))))
+
 (defun agent-rig-activity--descendants (root text)
   (let ((parents (list (format "%s" root))) rows found)
     (dolist (line (split-string text "\n" t))
@@ -93,7 +118,10 @@
         agent-rig-activity--session (agent-rig--select)
         agent-rig-activity--results nil)
   (let* ((session agent-rig-activity--session)
-         (pid (alist-get 'pid session)))
+         (pid (alist-get 'pid session))
+         (native (agent-rig-activity--native-record session)))
+    (when native
+      (setf (alist-get 'native agent-rig-activity--results) (alist-get 'status native)))
     (setf (alist-get 'output agent-rig-activity--results)
           (condition-case err
               (agent-rig-tmux--run "capture-pane" "-p" "-t" (alist-get 'pane session) "-S" "-60")
@@ -109,7 +137,7 @@
                    (concat "PID      CPU%  ELAPSED  COMMAND\n"
                            (mapconcat (lambda (row) (format "%-8s %s" (car row) (nth 2 row))) rows "\n") "\n")
                  "No descendant processes observed. Shared daemons are outside this tree.\n"))))
-          (when (equal (alist-get 'provider session) "claude-code")
+          (when (and (not native) (equal (alist-get 'provider session) "claude-code"))
             (setf (alist-get 'native agent-rig-activity--results) "Loading…")
             (agent-rig-activity--probe
              'native '("claude" "agents" "--json")

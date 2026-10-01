@@ -511,7 +511,11 @@
 
 (defun agent-rig-refresh ()
   (interactive)
-  (let* ((sessions (agent-rig-tmux-sessions))
+  (let* ((sessions (mapcar (lambda (session)
+                             (append session
+                                     (list (cons 'activity
+                                                 (alist-get 'status (agent-rig-activity--native-record session))))))
+                           (agent-rig-tmux-sessions)))
          (scoped (if agent-rig--show-all sessions
                    (cl-remove-if-not
                     (lambda (item) (equal (alist-get 'directory item) agent-rig--project-directory)) sessions)))
@@ -526,7 +530,7 @@
     (setq tabulated-list-format
           (vconcat (unless compact '(("Team" 14 t)))
                    (list (list "Seat" (if compact (max 9 (- (agent-rig--width) 29)) 18) t))
-                   '(("Provider" 12 t) ("Process" 12 t))
+                   '(("Provider" 12 t) ("State" 12 t))
                    (when show-project '(("Project" 0 t)))))
     (setq tabulated-list-sort-key (cons (if compact "Seat" "Team") nil))
     (tabulated-list-init-header)
@@ -538,7 +542,9 @@
                                   (alist-get 'provider session)
                                   (if (equal (alist-get 'status session) "exited")
                                       (propertize (concat "○ exited:" (alist-get 'exit-code session)) 'face 'warning)
-                                    (propertize "● running" 'face 'success)))
+                                    (propertize (concat "● " (or (alist-get 'activity session) "running"))
+                                                'face (if (equal (alist-get 'activity session) "waiting")
+                                                          'warning 'success))))
                                    (when show-project
                                      (list (abbreviate-file-name (alist-get 'directory session))))))) visible))
     (setq mode-line-process (format " [%d agents | %s]" (length visible)
@@ -612,6 +618,7 @@
                               (format "%s  ·  Process %s%s" (alist-get 'provider session) (alist-get 'status session)
                                       (if (equal (alist-get 'status session) "exited")
                                           (format " (%s)" (alist-get 'exit-code session)) ""))
+                              (format "Native activity: %s" (or (alist-get 'activity session) "unavailable"))
                               (format "Command %s · PID %s · d activity"
                                       (or (alist-get 'command session) "unknown")
                                       (or (alist-get 'pid session) "unknown"))
