@@ -5,7 +5,7 @@
 (defvar agent-rig-providers
   '((codex :command ("codex") :resume ("resume"))
     (claude-code :command ("claude") :resume ("--resume"))
-    (opencode :command ("opencode") :resume ("--session"))))
+    (opencode :command ("opencode" "--hostname" "127.0.0.1" "--port" "0") :resume ("--session"))))
 
 (defun agent-rig-provider-resume-command (provider conversation)
   (unless (and (stringp conversation)

@@ -3,6 +3,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'agent-rig-codex)
+(require 'agent-rig-opencode)
 
 (defvar-local agent-rig-activity--generation nil)
 (defvar-local agent-rig-activity--timer nil)
@@ -70,7 +71,7 @@
             (format "Snapshot: %s   [g] refresh\n"
                     (format-time-string "%H:%M:%S" (seconds-to-time agent-rig-activity--started)))
             (format "Native activity: %s\n" (or (alist-get 'native agent-rig-activity--results) "unavailable"))
-            (if (equal (alist-get 'provider session) "codex")
+            (if (member (alist-get 'provider session) '("codex" "opencode"))
                 (format "Recorded conversation: %s\n" (or (alist-get 'conversation session) "none; press i to record its exact ID"))
               "")
             (propertize "\nNATIVE SUBAGENTS\n" 'face 'agent-rig-section)
@@ -122,14 +123,17 @@
       (error (kill-buffer output)
              (setf (alist-get key agent-rig-activity--results) (error-message-string err))))))
 
-(defun agent-rig-activity--codex (session)
-  (when (and (equal (alist-get 'provider session) "codex")
+(defun agent-rig-activity--provider (session)
+  (when (and (member (alist-get 'provider session) '("codex" "opencode"))
              (alist-get 'conversation session))
     (let ((buffer (current-buffer)) (generation agent-rig-activity--generation) complete cancel)
       (setf (alist-get 'native agent-rig-activity--results) "Loading recorded conversation…")
       (setq cancel
-            (agent-rig-codex-snapshot
-             (alist-get 'conversation session) (alist-get 'directory session)
+            (funcall
+             (if (equal (alist-get 'provider session) "codex")
+                 (lambda (callback)
+                   (agent-rig-codex-snapshot (alist-get 'conversation session) (alist-get 'directory session) callback))
+               (lambda (callback) (agent-rig-opencode-snapshot session callback)))
              (lambda (error result)
                (setq complete t)
                (when (buffer-live-p buffer)
@@ -177,7 +181,7 @@
              'native '("claude" "agents" "--json")
              (lambda (text) (agent-rig-activity--claude-status pid text)))))
       (setf (alist-get 'children agent-rig-activity--results) "No live PID available.\n"))
-    (agent-rig-activity--codex session)
+    (agent-rig-activity--provider session)
     (agent-rig-activity--render)))
 
 (defun agent-rig-activity--cancel ()
