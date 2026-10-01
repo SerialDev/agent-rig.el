@@ -88,6 +88,8 @@
     (user-error "Agent has exited"))
   (let* ((pane (alist-get 'pane session))
          (bracketed (agent-rig-tmux--run "display-message" "-p" "-t" pane "#{bracket_paste_flag}")))
+    (when (string-empty-p bracketed)
+      (user-error "Prompt delivery requires tmux 3.7 or newer; upgrade tmux or type in the agent terminal"))
     (unless (equal bracketed "1")
       (user-error "Agent is not accepting bracketed paste; open its terminal and finish startup"))
     (let* ((file (make-temp-file "agent-rig-prompt-"))

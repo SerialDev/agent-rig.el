@@ -170,6 +170,10 @@
          (progn
            (agent-rig-start "team" "seat" 'fixture directory)
            (setq session (car (agent-rig-tmux-sessions)))
+           (if (string-empty-p (agent-rig-tmux--run "display-message" "-p" "-t"
+                                                  (alist-get 'pane session) "#{bracket_paste_flag}"))
+               (should-error (agent-rig-tmux-paste session text) :type 'user-error)
+             (progn
            (agent-rig-test-wait
             (lambda () (equal "1" (agent-rig-tmux--run "display-message" "-p" "-t"
                                                      (alist-get 'pane session) "#{bracket_paste_flag}"))))
@@ -181,7 +185,7 @@
                      (insert-file-contents output)
                      (equal (buffer-string) (concat literal "\n\033[200~" text "\033[201~"))))))
            (should-not (file-exists-p (expand-file-name "SHOULD_NOT_EXIST" directory)))
-           (should-not (file-exists-p (expand-file-name "ALSO_NOT_CREATED" directory))))
+           (should-not (file-exists-p (expand-file-name "ALSO_NOT_CREATED" directory))))))
        (when (file-exists-p output)
          (message "fixture received: %S" (with-temp-buffer (insert-file-contents output) (buffer-string))))
        (delete-directory directory t)))))
