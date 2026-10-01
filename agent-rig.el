@@ -10,9 +10,7 @@
   '(("pair" ("implementer" codex) ("reviewer" claude-code))
     ("mixed" ("implementer" codex) ("reviewer" claude-code) ("explorer" opencode))))
 (defvar agent-rig-terminal-function #'agent-rig-terminal)
-(defvar agent-rig-display-buffer-action
-  '((display-buffer-reuse-window display-buffer-in-side-window)
-    (side . right) (slot . 0) (window-width . 0.45)))
+(defvar agent-rig-display-buffer-action nil)
 (defvar agent-rig-refresh-interval 3)
 (defvar agent-rig--source-window nil)
 (defvar agent-rig--last-team "default")
@@ -65,8 +63,8 @@
 (defun agent-rig-start (team seat provider directory)
   (interactive
    (let* ((provider (intern (completing-read "Provider: " agent-rig-providers nil t)))
-          (team (read-string "Team: " agent-rig--last-team))
-          (seat (read-string "Seat: " (symbol-name provider))))
+          (team (read-string "Team: " nil nil agent-rig--last-team))
+          (seat (read-string "Seat: " nil nil (symbol-name provider))))
      (list team seat provider (read-directory-name "Project: " (agent-rig--directory) nil t))))
   (let* ((metadata (agent-rig--metadata team seat provider directory))
          (command (agent-rig-provider-command provider))
@@ -114,7 +112,16 @@
     (setq agent-rig--source-window (selected-window))))
 
 (defun agent-rig--display (buffer)
-  (pop-to-buffer buffer agent-rig-display-buffer-action))
+  (let* ((side (if (< (frame-width) 160) 'bottom 'right))
+         (existing (get-buffer-window buffer))
+         (action (or agent-rig-display-buffer-action
+                     `((display-buffer-reuse-window display-buffer-in-side-window)
+                       (side . ,side) (slot . 0) (window-width . 0.45) (window-height . 0.45)))))
+    (when (and (not agent-rig-display-buffer-action) existing
+               (window-parameter existing 'window-side)
+               (not (eq side (window-parameter existing 'window-side))))
+      (delete-window existing))
+    (pop-to-buffer buffer action)))
 
 (defun agent-rig-return-to-code ()
   (interactive)
@@ -134,10 +141,12 @@
     (define-key map (kbd "C-c C-s") #'agent-rig-send)
     (define-key map (kbd "C-c C-o") #'agent-rig-return-to-code)
     (define-key map (kbd "C-c C-n") #'agent-rig-next)
+    (define-key map (kbd "C-c C-d") #'agent-rig-detach)
     map))
 
 (defun agent-rig--prepare-terminal (buffer session)
   (with-current-buffer buffer
+    (setq-local display-line-numbers nil)
     (setq-local agent-rig--terminal-session (alist-get 'session session))
     (setq-local agent-rig--project-directory (alist-get 'directory session))
     (setq-local header-line-format
@@ -188,6 +197,15 @@
   (interactive)
   (agent-rig--remember-source)
   (funcall agent-rig-terminal-function (or session (agent-rig--select))))
+
+(defun agent-rig-detach ()
+  (interactive)
+  (unless agent-rig--terminal-session (user-error "This is not an agent terminal"))
+  (let ((process (get-buffer-process (current-buffer))))
+    (when process (set-process-query-on-exit-flag process nil)))
+  (kill-buffer (current-buffer))
+  (agent-rig-return-to-code)
+  (agent-rig))
 
 (defun agent-rig-switch ()
   (interactive)
@@ -333,15 +351,21 @@
                     (cl-remove-if-not
                      (lambda (item) (equal (alist-get 'directory item) agent-rig--project-directory))
                      sessions))))
+    (setq-local display-line-numbers nil)
+    (setq tabulated-list-format
+          (vconcat '(("Team" 14 t) ("Seat" 18 t) ("Provider" 12 t) ("Process" 10 t))
+                   (when agent-rig--show-all '(("Project" 0 t)))))
+    (tabulated-list-init-header)
     (setq tabulated-list-entries
           (mapcar (lambda (session)
                     (list (alist-get 'session session)
-                          (vector (alist-get 'team session) (alist-get 'seat session)
+                          (vconcat (list (alist-get 'team session) (alist-get 'seat session)
                                   (alist-get 'provider session)
                                   (if (equal (alist-get 'status session) "exited")
                                       (propertize (concat "exited:" (alist-get 'exit-code session)) 'face 'warning)
-                                    (propertize "running" 'face 'success))
-                                  (abbreviate-file-name (alist-get 'directory session))))) visible))
+                                    (propertize "running" 'face 'success)))
+                                   (when agent-rig--show-all
+                                     (list (abbreviate-file-name (alist-get 'directory session))))))) visible))
     (setq mode-line-process (format " [%d agents | %s]" (length visible)
                                     (if agent-rig--show-all "all projects" "this project")))
     (tabulated-list-print t)

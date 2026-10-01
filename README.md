@@ -51,7 +51,7 @@ Agent Rig uses vterm when installed, as in Tiqsi, and falls back to built-in `te
 
 `agent-rig-send-region` and `agent-rig-send-buffer` include the file name, line range, and whether the buffer has unsaved changes. `agent-rig-send-diff` composes the tracked working-tree diff against HEAD, including staged and unstaged tracked changes. Untracked files are excluded. All context remains editable in the prompt buffer before delivery.
 
-Set `agent-rig-display-buffer-action` to an Emacs display action to change panel placement, and `agent-rig-refresh-interval` to a positive number of seconds or nil to disable automatic refresh. `agent-rig-terminal-function` accepts a session alist and can be set to `agent-rig-vterm`, `agent-rig-term`, or a custom terminal adapter.
+Panels use the bottom of narrow frames and the right of wide frames, keeping source windows available. Set `agent-rig-display-buffer-action` to an Emacs display action to override that placement, and `agent-rig-refresh-interval` to a positive number of seconds or nil to disable automatic refresh. `agent-rig-terminal-function` accepts a session alist and can be set to `agent-rig-vterm`, `agent-rig-term`, or a custom terminal adapter.
 
 ## Teams and providers
 
