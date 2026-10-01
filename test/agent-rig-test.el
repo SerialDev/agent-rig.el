@@ -213,10 +213,10 @@
       (agent-rig-mode)
       (cl-letf (((symbol-function 'agent-rig-tmux-sessions) (lambda () nil)))
         (agent-rig-refresh)
-        (should (string-match-p "Launch an agent" (buffer-string)))
+        (should (text-property-any (point-min) (point-max) 'agent-rig-command #'agent-rig-start))
         (agent-rig-refresh)
         (goto-char (point-min))
-        (should (= 1 (how-many "Launch an agent" (point-min) (point-max))))))))
+        (should (= 1 (how-many "No agents" (point-min) (point-max))))))))
 
 (ert-deftest agent-rig-context-identifies-file-lines-and-unsaved-state ()
   (with-temp-buffer
@@ -483,6 +483,7 @@
                      (lambda () (interactive) (setq result (agent-rig--select)))))
             (agent-rig-refresh)
             (agent-rig-help)
+            (set-buffer (window-buffer (selected-window)))
             (should (derived-mode-p 'agent-rig-actions-mode))
             (should (eq agent-rig--action-origin origin))
             (call-interactively (key-binding (kbd "s")))
