@@ -80,7 +80,7 @@
                            'action #'agent-rig--button-action 'follow-link t
                            'mouse-face 'highlight 'face 'agent-rig-action
                            'help-echo (symbol-name (cadr entry)))))
-    (add-face-text-property 0 (length key) 'agent-rig-key t text)
+    (add-face-text-property 0 (length key) 'agent-rig-key nil text)
     text))
 
 (defun agent-rig--directory ()
