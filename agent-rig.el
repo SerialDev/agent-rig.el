@@ -541,7 +541,7 @@
                                             (directory-file-name (or agent-rig--project-directory default-directory)))))
                           'face 'agent-rig-section)
               "\n")
-      (insert (format "  %d seats  ·  " (length visible))
+      (insert (format "  %d seat%s  ·  " (length visible) (if (= (length visible) 1) "" "s"))
               (propertize (format "%d running" running) 'face 'success)
               (propertize (format "  ·  %d exited\n\n" (- (length visible) running)) 'face 'shadow))
       (unless (string-empty-p agent-rig--filter)
@@ -678,7 +678,8 @@
 
 (defun agent-rig-command-palette ()
   (interactive)
-  (let* ((choices (mapcar (lambda (entry)
+  (let* ((completion-styles '(substring flex basic))
+         (choices (mapcar (lambda (entry)
                             (cons (format "%-9s %s  [%s]" (nth 3 entry) (nth 2 entry) (car entry))
                                   (cadr entry)))
                           (cl-remove-if (lambda (entry) (eq (cadr entry) #'agent-rig-command-palette))
