@@ -58,6 +58,8 @@
          (id (or agent-rig--terminal-session
                  (and (derived-mode-p 'agent-rig-mode) (tabulated-list-get-id))))
          (selected (cl-find id sessions :key (lambda (item) (alist-get 'session item)) :test #'equal)))
+    (when (and id (not selected))
+      (user-error "This agent disappeared; refresh the dashboard"))
     (or selected
         (let ((choices (mapcar (lambda (item) (cons (agent-rig--label item) item)) sessions)))
           (unless choices (user-error "No managed agents; use agent-rig-start"))
@@ -118,7 +120,7 @@
     (nreverse started)))
 
 (defun agent-rig--remember-source ()
-  (unless (or agent-rig--terminal-session agent-rig--prompt-targets
+  (unless (or agent-rig--project-directory agent-rig--terminal-session agent-rig--prompt-targets
               (derived-mode-p 'agent-rig-mode 'agent-rig-prompt-mode))
     (setq agent-rig--source-window (selected-window))))
 
@@ -132,7 +134,8 @@
                (window-parameter existing 'window-side)
                (not (eq side (window-parameter existing 'window-side))))
       (delete-window existing))
-    (pop-to-buffer buffer action)))
+    (pop-to-buffer buffer action)
+    (set-window-hscroll (selected-window) 0)))
 
 (defun agent-rig-return-to-code ()
   (interactive)
@@ -179,8 +182,8 @@
     (setq-local agent-rig--terminal-session (alist-get 'session session))
     (setq-local agent-rig--project-directory (alist-get 'directory session))
     (setq-local header-line-format
-                (format "%s | C-c a: agents  C-c C-s: prompt  C-c C-o: code  C-c C-n: next"
-                        (agent-rig--label session)))
+                (format "C-c a: agents | C-c C-o: code | C-c C-f: focus | %s/%s [%s]"
+                        (alist-get 'team session) (alist-get 'seat session) (alist-get 'provider session)))
     (use-local-map (make-composed-keymap agent-rig-terminal-map (current-local-map))))
   (agent-rig--display buffer))
 
@@ -270,6 +273,10 @@
         (erase-buffer)
         (insert (agent-rig--label session) "\n\n" text))
       (special-mode)
+      (setq-local display-line-numbers nil)
+      (setq-local agent-rig--project-directory (alist-get 'directory session))
+      (setq default-directory agent-rig--project-directory)
+      (goto-char (point-min))
       (agent-rig--display (current-buffer)))))
 
 (defun agent-rig-stop ()
@@ -327,6 +334,7 @@
     map))
 
 (define-derived-mode agent-rig-prompt-mode text-mode "Agent Prompt"
+  (setq-local display-line-numbers nil)
   (visual-line-mode 1))
 
 (defun agent-rig--compose (targets &optional text)
@@ -338,8 +346,9 @@
       (setq default-directory agent-rig--project-directory)
       (setq-local agent-rig--prompt-targets (mapcar (lambda (item) (alist-get 'session item)) targets))
       (setq-local header-line-format
-                  (format "To: %s | C-c C-c: paste draft, then submit in agent terminal"
-                          (mapconcat #'agent-rig--label targets ", ")))
+                  (format "C-c C-c: paste draft | C-c C-o: code | To: %s"
+                          (mapconcat (lambda (item) (format "%s/%s" (alist-get 'team item)
+                                                            (alist-get 'seat item))) targets ", ")))
       (when text (insert text)))
     (agent-rig--display buffer)))
 
