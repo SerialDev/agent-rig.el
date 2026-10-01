@@ -349,3 +349,63 @@
            (should (= (length (agent-rig-tmux-sessions)) 1))
            (should (file-exists-p (expand-file-name "last-restore.json" agent-rig-state-directory))))
        (delete-directory agent-rig-state-directory t)))))
+
+(ert-deftest agent-rig-adoption-preserves-process-and-rejects-seat-collision ()
+  (agent-rig-test-with-server
+   (let* ((pane (agent-rig-tmux--run "new-session" "-d" "-P" "-F" "#{pane_id}"
+                                    "-s" "outside" "-c" temporary-file-directory "sleep 30"))
+          (pid (agent-rig-tmux--run "display-message" "-p" "-t" pane "#{pane_pid}"))
+          (agent-rig-providers '((fixture :command ("sh")))))
+     (should (= (length (agent-rig-tmux-unmanaged)) 1))
+     (cl-letf (((symbol-function 'completing-read)
+                (lambda (prompt choices &rest _)
+                  (if (string-prefix-p "Provider" prompt) "fixture" (caar choices))))
+               ((symbol-function 'read-string)
+                (lambda (prompt &rest _) (if (equal prompt "Team: ") "adopted" "worker")))
+               ((symbol-function 'agent-rig) #'ignore))
+       (agent-rig-adopt))
+     (should (equal pid (agent-rig-tmux--run "display-message" "-p" "-t" pane "#{pane_pid}")))
+     (should-not (agent-rig-tmux-unmanaged))
+     (should (equal (alist-get 'session (car (agent-rig-tmux-sessions))) "outside"))
+     (should-error (agent-rig-start "adopted" "worker" 'fixture temporary-file-directory)
+                   :type 'user-error))))
+
+(ert-deftest agent-rig-focus-restores-source-layout ()
+  (save-window-excursion
+    (let ((agent-rig--window-configuration nil)
+          (buffer (generate-new-buffer " *agent-focus-test*")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (split-window-right)
+            (with-current-buffer buffer (agent-rig-prompt-mode))
+            (agent-rig--display buffer)
+            (let ((count (length (window-list))))
+              (agent-rig-toggle-focus)
+              (should (= (length (window-list)) 1))
+              (should (eq (window-buffer) buffer))
+              (agent-rig-toggle-focus)
+              (should (= (length (window-list)) count))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest agent-rig-worktree-isolation-preserves-original-checkout ()
+  (let* ((root (make-temp-file "agent-rig-git-" t))
+         (project (expand-file-name "project/" root))
+         (worktree (expand-file-name "isolated" root))
+         (agent-rig-providers '((fixture :command ("sh")))))
+    (unwind-protect
+        (progn
+          (make-directory project)
+          (let ((default-directory project))
+            (should (zerop (process-file "git" nil nil nil "init" "-b" "main")))
+            (should (zerop (process-file "git" nil nil nil "-c" "user.name=Test" "-c"
+                                         "user.email=test@example.invalid" "commit" "--allow-empty" "-m" "initial")))
+            (cl-letf (((symbol-function 'agent-rig-start)
+                       (lambda (_team _seat _provider directory)
+                         (should (equal directory worktree)) "fixture")))
+              (agent-rig-worktree-start "team" "seat" 'fixture project worktree "codex/seat"))
+            (with-temp-buffer
+              (process-file "git" nil t nil "branch" "--show-current")
+              (should (equal (string-trim (buffer-string)) "main"))))
+          (should (file-exists-p (expand-file-name ".git" worktree))))
+      (delete-directory root t))))

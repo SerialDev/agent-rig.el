@@ -79,6 +79,22 @@
        (ignore-errors (agent-rig-tmux--run "kill-session" "-t" target))
        (signal (car err) (cdr err))))))
 
+(defun agent-rig-tmux-unmanaged ()
+  (let ((result (agent-rig-tmux--call "list-panes" "-a" "-F"
+                                     "#{session_name}|#{pane_id}|#{session_windows}|#{window_panes}|#{pane_dead}|#{pane_current_path}|#{pane_current_command}|#{@agent-rig}"))
+        candidates)
+    (if (equal (car result) 0)
+        (dolist (line (split-string (cdr result) "\n" t))
+          (let ((fields (split-string line "|")))
+            (when (and (= (length fields) 8)
+                       (equal (nth 2 fields) "1") (equal (nth 3 fields) "1")
+                       (equal (nth 4 fields) "0") (string-empty-p (nth 7 fields)))
+              (push `((session . ,(nth 0 fields)) (pane . ,(nth 1 fields))
+                      (directory . ,(nth 5 fields)) (command . ,(nth 6 fields))) candidates))))
+      (unless (string-match-p "no server running\\|No such file or directory" (cdr result))
+        (error "Cannot discover unmanaged panes: %s" (cdr result))))
+    (nreverse candidates)))
+
 (defun agent-rig-tmux-paste (session text)
   (unless (and (stringp text) (not (string-empty-p text)))
     (user-error "Message is empty"))

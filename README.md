@@ -104,3 +104,13 @@ From the dashboard, `i` records the exact native conversation ID for the selecte
 Snapshots contain project paths, seat identities, providers, and optional conversation IDs, never executable commands. They are written atomically with mode 0600 under `agent-rig-state-directory` (default `~/.emacs.d/agent-rig/`). Restoration validates the whole snapshot before launching anything, reports each seat separately, and retains the latest results in `last-restore.json`. It does not replay prompts or restore unsent provider input.
 
 In an agent terminal, `C-c C-d` detaches the Emacs client while leaving the agent alive. Use `C-c a` to reach Emacs commands through the dashboard; terminal modes can forward ordinary Emacs shortcuts to the provider.
+
+### Collaboration and isolation
+
+Dashboard `h` creates an editable handoff containing another agent's captured terminal output. Choose the recipient, write its task, and trim the capture before `C-c C-c` pastes it. In a terminal, `C-c C-j` explicitly sends Enter after confirmation; the provider still owns acceptance and approval. No delivery is reported as completed model work.
+
+Dashboard `w` creates a new Git branch and worktree at a new directory, then launches the agent there. The original checkout is untouched. Existing directories and branches are rejected by preflight/Git; a launch failure retains the created worktree and reports its path. Stopping an agent never removes its worktree.
+
+Dashboard `A` adopts an unmanaged, running, single-pane/single-window session on `agent-rig-tmux-socket`. Select the terminal and identify its provider. Adoption adds manager metadata and retains terminal output on process exit; it does not restart the process. Use `agent-rig-tmux-socket` consistently for one server (default `agent-rig`; `default` selects the usual tmux server). Cross-server aggregation and attaching non-tmux processes are not supported. Existing multi-pane sessions are excluded so the manager cannot take over an unrelated workspace.
+
+Dashboard `f`, or `C-c C-f` inside a terminal, toggles the agent to a full-frame view and restores the previous window layout. `C-c C-o` also restores that layout before returning to code.

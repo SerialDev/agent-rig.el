@@ -6,6 +6,7 @@
 (require 'agent-rig-providers)
 (require 'agent-rig-tmux)
 (require 'agent-rig-state)
+(require 'agent-rig-worktree)
 
 (defvar agent-rig-teams
   '(("pair" ("implementer" codex) ("reviewer" claude-code))
@@ -15,6 +16,7 @@
 (defvar agent-rig-refresh-interval 3)
 (defvar agent-rig--source-window nil)
 (defvar agent-rig--last-team "default")
+(defvar agent-rig--window-configuration nil)
 (defvar-local agent-rig--project-directory nil)
 (defvar-local agent-rig--show-all nil)
 (defvar-local agent-rig--refresh-timer nil)
@@ -69,7 +71,15 @@
      (list team seat provider (read-directory-name "Project: " (agent-rig--directory) nil t))))
   (let* ((metadata (agent-rig--metadata team seat provider directory))
          (command (agent-rig-provider-command provider))
-         (session (agent-rig-tmux-start metadata command)))
+         (session
+          (progn
+            (when (cl-find-if
+                   (lambda (item)
+                     (cl-every (lambda (key) (equal (alist-get key item) (alist-get key metadata)))
+                               '(team seat directory)))
+                   (agent-rig-tmux-sessions))
+              (user-error "This team seat already exists"))
+            (agent-rig-tmux-start metadata command))))
     (setq agent-rig--last-team team)
     (when (called-interactively-p 'interactive)
       (agent-rig)
@@ -126,9 +136,25 @@
 
 (defun agent-rig-return-to-code ()
   (interactive)
+  (when agent-rig--window-configuration (agent-rig-toggle-focus))
   (if (window-live-p agent-rig--source-window)
       (select-window agent-rig--source-window)
     (other-window 1)))
+
+(defun agent-rig-toggle-focus ()
+  (interactive)
+  (if agent-rig--window-configuration
+      (let ((configuration agent-rig--window-configuration))
+        (setq agent-rig--window-configuration nil)
+        (set-window-configuration configuration))
+    (let ((buffer (current-buffer)))
+      (unless (or agent-rig--terminal-session (derived-mode-p 'agent-rig-mode 'agent-rig-prompt-mode))
+        (user-error "Open an Agent Rig buffer first"))
+      (setq agent-rig--window-configuration (current-window-configuration))
+      (dolist (window (window-list))
+        (when (window-parameter window 'window-side) (delete-window window)))
+      (delete-other-windows)
+      (switch-to-buffer buffer))))
 
 (defun agent-rig--terminal-name (session)
   (format "*Agent Rig %s/%s/%s [%s]*"
@@ -143,6 +169,8 @@
     (define-key map (kbd "C-c C-o") #'agent-rig-return-to-code)
     (define-key map (kbd "C-c C-n") #'agent-rig-next)
     (define-key map (kbd "C-c C-d") #'agent-rig-detach)
+    (define-key map (kbd "C-c C-j") #'agent-rig-submit)
+    (define-key map (kbd "C-c C-f") #'agent-rig-toggle-focus)
     map))
 
 (defun agent-rig--prepare-terminal (buffer session)
@@ -248,8 +276,33 @@
   (interactive)
   (let ((session (agent-rig--select)))
     (when (yes-or-no-p (format "Stop %s and discard its terminal history? " (agent-rig--label session)))
-      (agent-rig-tmux--run "kill-session" "-t" (concat "=" (alist-get 'session session)))
+      (agent-rig-tmux--run "kill-pane" "-t" (alist-get 'pane session))
       (when (derived-mode-p 'agent-rig-mode) (agent-rig-refresh)))))
+
+(defun agent-rig-adopt ()
+  (interactive)
+  (let* ((candidates (agent-rig-tmux-unmanaged))
+         (choices (mapcar (lambda (item)
+                            (cons (format "%s [%s] %s" (alist-get 'session item)
+                                          (alist-get 'command item) (alist-get 'directory item)) item))
+                          candidates)))
+    (unless choices
+      (user-error "No unmanaged single-pane sessions on tmux socket %s" agent-rig-tmux-socket))
+    (let* ((selected (cdr (assoc (completing-read "Adopt existing terminal: " choices nil t) choices)))
+           (provider (intern (completing-read "Provider running in that terminal: " agent-rig-providers nil t)))
+           (team (read-string "Team: " nil nil agent-rig--last-team))
+           (seat (read-string "Seat: " nil nil (symbol-name provider)))
+           (metadata (agent-rig--metadata team seat provider (alist-get 'directory selected))))
+      (when (cl-find-if
+             (lambda (item) (cl-every (lambda (key) (equal (alist-get key item) (alist-get key metadata)))
+                                      '(team seat directory)))
+             (agent-rig-tmux-sessions))
+        (user-error "This team seat already exists"))
+      (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane selected)
+                           "@agent-rig" (agent-rig-tmux--encode metadata))
+      (agent-rig-tmux--run "set-option" "-w" "-t" (alist-get 'pane selected) "remain-on-exit" "on")
+      (agent-rig)
+      (message "Adopted existing process; conversation and terminal state preserved"))))
 
 (defun agent-rig-restart ()
   (interactive)
@@ -293,6 +346,31 @@
 (defun agent-rig-send ()
   (interactive)
   (agent-rig--compose (list (agent-rig--select))))
+
+(defun agent-rig-handoff ()
+  (interactive)
+  (let* ((source (agent-rig--select))
+         (choices (mapcar (lambda (item) (cons (agent-rig--label item) item))
+                          (cl-remove-if
+                           (lambda (item) (equal (alist-get 'session source) (alist-get 'session item)))
+                           (agent-rig-tmux-sessions))))
+         (text (agent-rig-tmux--run "capture-pane" "-p" "-J" "-S" "-2000"
+                                   "-t" (alist-get 'pane source))))
+    (unless choices (user-error "Launch another agent to receive this handoff"))
+    (agent-rig--compose
+     (list (cdr (assoc (completing-read "Handoff to: " choices nil t) choices)))
+     (format "Handoff from %s\n\nTask for recipient:\n\nTerminal output (review and trim before sending):\n\n%s"
+             (agent-rig--label source) text))))
+
+(defun agent-rig-submit ()
+  (interactive)
+  (unless agent-rig--terminal-session
+    (user-error "Open the target terminal and inspect its draft before submitting"))
+  (let ((session (agent-rig--select)))
+    (unless (equal (alist-get 'status session) "running") (user-error "Agent has exited"))
+    (when (yes-or-no-p "Send Enter to this agent's visible input? ")
+      (agent-rig-tmux--run "send-keys" "-t" (alist-get 'pane session) "Enter")
+      (message "Enter sent; inspect the provider for acceptance or approval prompts"))))
 
 (defun agent-rig-send-region (begin end)
   (interactive "r")
@@ -399,10 +477,13 @@
 (defvar agent-rig--commands
   '(("n" agent-rig-start "New agent")
     ("t" agent-rig-start-team "Launch team")
+    ("w" agent-rig-worktree-start "Launch in a new Git worktree")
+    ("A" agent-rig-adopt "Adopt an existing tmux terminal")
     ("RET" agent-rig-open "Open terminal")
     ("TAB" agent-rig-switch "Switch agent")
     ("s" agent-rig-send "Compose prompt")
     ("b" agent-rig-broadcast "Broadcast to team")
+    ("h" agent-rig-handoff "Compose handoff to another agent")
     ("o" agent-rig-capture "Capture output")
     ("r" agent-rig-restart "Restart exited agent")
     ("S" agent-rig-save "Save project seats")
@@ -412,6 +493,7 @@
     ("a" agent-rig-toggle-projects "Toggle this project / all projects")
     ("g" agent-rig-refresh "Refresh")
     ("?" agent-rig-help "Commands and setup")
+    ("f" agent-rig-toggle-focus "Toggle full-frame view")
     ("C-c C-o" agent-rig-return-to-code "Return to source window")))
 
 (defun agent-rig-help ()
