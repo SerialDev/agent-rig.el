@@ -7,6 +7,7 @@ Manage Codex, Claude Code, OpenCode, and other terminal agents from Emacs. Inspi
 Requires Emacs 27.1+, tmux 3.7+ for buffered prompt delivery, and installed/authenticated provider CLIs visible in Emacs `exec-path`. Older tmux versions support lifecycle management and direct terminal input. On macOS, install tmux with `brew install tmux`.
 
 ```elisp
+(straight-use-package 'websocket)
 (use-package agent-rig
   :straight (agent-rig :type git :host github
                        :repo "SerialDev/agent-rig.el"
@@ -83,7 +84,7 @@ Use `i` to record the exact native conversation ID. Restore validates the entire
 
 The dedicated `agent-rig` tmux server starts without loading user tmux configuration. Adoption discovers unmanaged running single-pane/single-window sessions on the configured `agent-rig-tmux-socket`. It records metadata and enables retained exit output without restarting the process. Use one socket consistently; `"default"` selects the usual tmux server. Cross-server aggregation, adopting multi-pane workspaces, and retroactive attachment of non-tmux processes are unsupported.
 
-The dashboard reports process state and exit code, not inferred agent progress or task success. Automatic conversation discovery, task dependency scheduling, autonomous routing, usage telemetry, and an MCP control API are outside this release.
+The dashboard reports process state, exit code, and verified native activity when available. Native activity does not establish task success. Automatic conversation discovery, task dependency scheduling, autonomous routing, usage telemetry, and an MCP control API are outside this release.
 
 ## Modules and validation
 
@@ -107,6 +108,14 @@ emacs -Q --batch -L . -l test/agent-rig-test.el -f ert-run-tests-batch-and-exit
 
 `M-left` returns from an agent terminal or activity view to the all-projects overview, clears any filter, and keeps that agent selected. `M-right` opens the selected agent terminal. Neither action stops the agent.
 
-Press `d` for the activity inspector: foreground command, pane PID, OS descendant processes with CPU and elapsed time, and recent terminal output. The visible inspector refreshes every three seconds; `g` refreshes immediately. Claude Code's native session status is queried asynchronously and matched by exact PID. Unsupported CLI versions or missing sessions report unavailable. OS children are not counted as subagents; shared daemons and in-process agent work cannot be inferred from a process tree. Codex/OpenCode native busy state and provider subagent counts are currently unavailable; the terminal output remains visible as evidence of what the provider reports.
+Press `d` for the activity inspector: foreground command, pane PID, OS descendant processes with CPU and elapsed time, and recent terminal output. The visible inspector refreshes every three seconds; `g` refreshes immediately. Claude Code's native session status is queried asynchronously and matched by exact PID. Unsupported CLI versions or missing sessions report unavailable. OS children are not counted as subagents; shared daemons and in-process agent work cannot be inferred from a process tree. OpenCode native activity and Claude subagent telemetry remain unavailable; terminal output remains visible as evidence of what those providers report.
 
 The overview's State column shows Claude's native `idle`, `busy`, `waiting`, or `shell` state when a local session record matches the pane PID, working directory, and current process lifetime. `waiting` is highlighted. Exited panes always remain exited. Missing or incompatible records fall back to process state in the overview and the asynchronous CLI probe in the inspector. `CLAUDE_CONFIG_DIR` is honored when present in Emacs's environment.
+
+### Codex native activity
+
+Install the optional `websocket` Emacs package (Tiqsi's integration does this through Straight). In the Codex seat, use `i` to record the exact conversation ID shown by Codex. Open `d` to inspect that recorded conversation: native status and approval/input flags, loaded spawned descendants with their roles and native statuses, and tools among the ten most recent native items. The conversation's project must match the seat's project.
+
+This connection reads the existing daemon's Unix control socket, without starting a daemon, resuming a conversation, submitting prompts, or answering approval requests. The default socket is under `CODEX_HOME` or `~/.codex`; set `agent-rig-codex-socket` for another existing daemon. Requests have a ten-second deadline. Missing sockets, missing dependencies, unsupported protocol methods, and inventories exceeding 1,000 records report unavailable.
+
+The recorded conversation is shown separately from the terminal process. Its ID is user supplied, not inferred from a PID or the most recent project conversation. Update it after switching conversations inside Codex. `notLoaded` means the recorded conversation is not loaded in that daemon. The child view follows native parent IDs, excludes unloaded children, and includes nested spawned descendants; OS subprocesses remain a separate section.

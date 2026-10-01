@@ -2,9 +2,11 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'agent-rig-codex)
 
 (defvar-local agent-rig-activity--generation nil)
 (defvar-local agent-rig-activity--timer nil)
+(defvar-local agent-rig-activity--native-cancel nil)
 (defvar-local agent-rig-activity--started 0)
 (defvar-local agent-rig-activity--processes nil)
 (defvar-local agent-rig-activity--session nil)
@@ -67,8 +69,18 @@
                     (or (alist-get 'command session) "unknown"))
             (format "Snapshot: %s   [g] refresh\n"
                     (format-time-string "%H:%M:%S" (seconds-to-time agent-rig-activity--started)))
-            (format "Native activity: %s\nSubagents: unavailable from this provider's process inventory\n\n"
-                    (or (alist-get 'native agent-rig-activity--results) "unavailable"))
+            (format "Native activity: %s\n" (or (alist-get 'native agent-rig-activity--results) "unavailable"))
+            (if (equal (alist-get 'provider session) "codex")
+                (format "Recorded conversation: %s\n" (or (alist-get 'conversation session) "none; press i to record its exact ID"))
+              "")
+            (propertize "\nNATIVE SUBAGENTS\n" 'face 'agent-rig-section)
+            (or (alist-get 'subagents agent-rig-activity--results) "Unavailable from this provider's process inventory.")
+            "\n"
+            (if (alist-get 'tools agent-rig-activity--results)
+                (concat (propertize "\nRECENT NATIVE TOOLS\n" 'face 'agent-rig-section)
+                        (alist-get 'tools agent-rig-activity--results) "\n")
+              "")
+            "\n"
             (propertize "OS CHILD PROCESSES (not a subagent count)\n" 'face 'agent-rig-section)
             (or (alist-get 'children agent-rig-activity--results) "Loading…\n")
             (propertize "\nRECENT TERMINAL OUTPUT\n" 'face 'agent-rig-section)
@@ -110,6 +122,28 @@
       (error (kill-buffer output)
              (setf (alist-get key agent-rig-activity--results) (error-message-string err))))))
 
+(defun agent-rig-activity--codex (session)
+  (when (and (equal (alist-get 'provider session) "codex")
+             (alist-get 'conversation session))
+    (let ((buffer (current-buffer)) (generation agent-rig-activity--generation) complete cancel)
+      (setf (alist-get 'native agent-rig-activity--results) "Loading recorded conversation…")
+      (setq cancel
+            (agent-rig-codex-snapshot
+             (alist-get 'conversation session) (alist-get 'directory session)
+             (lambda (error result)
+               (setq complete t)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (when (and (derived-mode-p 'agent-rig-activity-mode)
+                              (eq generation agent-rig-activity--generation))
+                     (setq agent-rig-activity--native-cancel nil)
+                     (if error
+                         (setf (alist-get 'native agent-rig-activity--results) (concat "Unavailable: " error))
+                       (dolist (entry result)
+                         (setf (alist-get (car entry) agent-rig-activity--results) (cdr entry)))
+                     (agent-rig-activity--render))))))))
+      (unless complete (setq agent-rig-activity--native-cancel cancel)))))
+
 (defun agent-rig-activity-refresh ()
   (interactive)
   (agent-rig-activity--cancel)
@@ -143,10 +177,13 @@
              'native '("claude" "agents" "--json")
              (lambda (text) (agent-rig-activity--claude-status pid text)))))
       (setf (alist-get 'children agent-rig-activity--results) "No live PID available.\n"))
+    (agent-rig-activity--codex session)
     (agent-rig-activity--render)))
 
 (defun agent-rig-activity--cancel ()
   (setq agent-rig-activity--generation nil)
+  (when agent-rig-activity--native-cancel (funcall agent-rig-activity--native-cancel))
+  (setq agent-rig-activity--native-cancel nil)
   (dolist (process agent-rig-activity--processes)
     (when (process-live-p process) (delete-process process)))
   (setq agent-rig-activity--processes nil))
@@ -155,7 +192,7 @@
   (when (and (buffer-live-p buffer) (get-buffer-window buffer t))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'agent-rig-activity-mode)
-                 (or (null agent-rig-activity--processes)
+                 (or (and (null agent-rig-activity--processes) (null agent-rig-activity--native-cancel))
                      (> (- (float-time) agent-rig-activity--started) 10)))
         (condition-case err (agent-rig-activity-refresh)
           (error
@@ -176,11 +213,12 @@
     (define-key map (kbd "M-<left>") #'agent-rig-overview)
     (define-key map (kbd "M-<right>") #'agent-rig-open)
     (define-key map (kbd "g") #'agent-rig-activity-refresh)
+    (define-key map (kbd "i") #'agent-rig-set-conversation)
     map))
 
 (define-derived-mode agent-rig-activity-mode special-mode "Rig Activity"
   (setq-local truncate-lines t)
-  (setq-local header-line-format "M-← all agents · M-→ terminal · g refresh · q back")
+  (setq-local header-line-format "M-← agents · M-→ terminal · i conversation ID · g refresh · q back")
   (add-hook 'kill-buffer-hook #'agent-rig-activity--stop nil t)
   (add-hook 'change-major-mode-hook #'agent-rig-activity--stop nil t)
   (setq agent-rig-activity--timer
