@@ -22,7 +22,9 @@ The implementation branch is explicit while the initial PR is under review. Afte
 
 Open `M-x agent-rig` in a project. Tiqsi binds `C-c a` to the dashboard and `C-c A` to its agent Hydra, including inside agent terminals. Providers retain their own authentication, configuration, hook trust, and approvals.
 
-The dashboard follows the originating project and refreshes only while visible. Its highlighted row is the action target; `j`/`k`, arrows, or `C-n`/`C-p` move between agents. Grouped clickable actions and selected-seat details appear beneath the list. `?` opens a native action menu: press a displayed key or click an action, and it runs against the original selection. `q` or Escape closes that menu.
+The dashboard follows the originating project and refreshes only while visible. Its highlighted row is the action target; `j`/`k`, arrows, or `C-n`/`C-p` move between agents. A workspace summary, process-status marks, selected-agent card, and persistent shortcut bar keep context visible. `/` filters by team, seat, provider, or path; Escape clears the filter. `:` opens a command picker through your normal Emacs completion UI.
+
+`?` opens bordered action groups with distinct key labels, laid out in two columns or stacked in narrow windows. Press a displayed key or click an action to run it against the original selection; `q` or Escape returns. This presentation takes inspiration from [OpenRig's TUI](https://github.com/mvschwarz/openrig/tree/main/packages/tui), particularly its explorer/detail hierarchy, semantic color roles, and command palette. Rendering remains native Emacs text, faces, buttons, and windows. The `agent-rig-*` faces support dark/light themes and terminal Emacs.
 
 Panels appear below code in narrow frames and to the right in wide frames. `f` expands an agent view to the full frame and restores the previous layout. Override placement with `agent-rig-display-buffer-action`; disable idle refresh by setting `agent-rig-refresh-interval` to nil.
 

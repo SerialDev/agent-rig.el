@@ -10,6 +10,22 @@
 (require 'agent-rig-state)
 (require 'agent-rig-worktree)
 
+(defface agent-rig-title
+  '((((class color) (background dark)) (:foreground "#9bbfff" :weight bold :height 1.15))
+    (((class color) (background light)) (:foreground "#315da8" :weight bold :height 1.15))
+    (t (:inherit bold))) "")
+(defface agent-rig-section '((t (:inherit agent-rig-title :height 1.0))) "")
+(defface agent-rig-border
+  '((((class color) (background dark)) (:foreground "#60738d"))
+    (((class color) (background light)) (:foreground "#77879b"))
+    (t (:inherit shadow))) "")
+(defface agent-rig-key '((t (:inherit agent-rig-section))) "")
+(defface agent-rig-action '((t (:inherit default :underline nil))) "")
+(defface agent-rig-selection
+  '((((class color) (background dark)) (:background "#22344b" :extend t))
+    (((class color) (background light)) (:background "#e1eaf5" :extend t))
+    (t (:inherit highlight))) "")
+
 (defvar agent-rig-teams
   '(("pair" ("implementer" codex) ("reviewer" claude-code))
     ("mixed" ("implementer" codex) ("reviewer" claude-code) ("explorer" opencode))))
@@ -32,6 +48,40 @@
 (defvar-local agent-rig--details-start nil)
 (defvar-local agent-rig--details-end nil)
 (defvar-local agent-rig--action-origin nil)
+(defvar-local agent-rig--filter "")
+
+(defun agent-rig--width ()
+  (max 36 (- (window-body-width (get-buffer-window (current-buffer))) 2)))
+
+(defun agent-rig--fit (text width)
+  (let ((text (truncate-string-to-width text width nil nil "…")))
+    (concat text (make-string (max 0 (- width (string-width text))) ?\s))))
+
+(defun agent-rig--panel (title lines width)
+  (let* ((inside (- width 4))
+         (title (truncate-string-to-width title (- width 6) nil nil "…"))
+         (top (concat (propertize "╭─ " 'face 'agent-rig-border)
+                      (propertize title 'face 'agent-rig-section)
+                      (propertize (concat " " (make-string (max 0 (- width (string-width title) 5)) ?─) "╮")
+                                  'face 'agent-rig-border)))
+         (bottom (propertize (concat "╰" (make-string (- width 2) ?─) "╯") 'face 'agent-rig-border)))
+    (append (list top)
+            (mapcar (lambda (line)
+                      (concat (propertize "│ " 'face 'agent-rig-border)
+                              (agent-rig--fit line inside)
+                              (propertize " │" 'face 'agent-rig-border))) lines)
+            (list bottom))))
+
+(defun agent-rig--action-string (entry)
+  (let* ((key (concat "[" (car entry) "]"))
+         (label (concat (agent-rig--fit key (max 7 (+ 2 (string-width key)))) (nth 2 entry)))
+         (text (propertize label 'button t 'category 'default-button
+                           'keymap button-map 'agent-rig-command (cadr entry)
+                           'action #'agent-rig--button-action 'follow-link t
+                           'mouse-face 'highlight 'face 'agent-rig-action
+                           'help-echo (symbol-name (cadr entry)))))
+    (add-face-text-property 0 (length key) 'agent-rig-key t text)
+    text))
 
 (defun agent-rig--directory ()
   (or agent-rig--project-directory
@@ -450,36 +500,68 @@
 (defun agent-rig-refresh ()
   (interactive)
   (let* ((sessions (agent-rig-tmux-sessions))
-         (visible (if agent-rig--show-all sessions
-                    (cl-remove-if-not
-                     (lambda (item) (equal (alist-get 'directory item) agent-rig--project-directory))
-                     sessions))))
+         (scoped (if agent-rig--show-all sessions
+                   (cl-remove-if-not
+                    (lambda (item) (equal (alist-get 'directory item) agent-rig--project-directory)) sessions)))
+         (visible (cl-remove-if-not
+                   (lambda (item) (string-match-p (regexp-quote (downcase agent-rig--filter))
+                                                  (downcase (agent-rig--label item)))) scoped))
+         (compact (< (agent-rig--width) 64))
+         (show-project (and agent-rig--show-all (>= (agent-rig--width) 100))))
     (setq-local display-line-numbers nil)
     (setq agent-rig--visible-sessions visible)
     (setq agent-rig--selected-session (or (tabulated-list-get-id) agent-rig--selected-session))
     (setq tabulated-list-format
-          (vconcat '(("Team" 14 t) ("Seat" 18 t) ("Provider" 12 t) ("Process" 10 t))
-                   (when agent-rig--show-all '(("Project" 0 t)))))
+          (vconcat (unless compact '(("Team" 14 t)))
+                   (list (list "Seat" (if compact (max 9 (- (agent-rig--width) 29)) 18) t))
+                   '(("Provider" 12 t) ("Process" 12 t))
+                   (when show-project '(("Project" 0 t)))))
+    (setq tabulated-list-sort-key (cons (if compact "Seat" "Team") nil))
     (tabulated-list-init-header)
     (setq tabulated-list-entries
           (mapcar (lambda (session)
                     (list (alist-get 'session session)
-                          (vconcat (list (alist-get 'team session) (alist-get 'seat session)
+                          (vconcat (unless compact (list (alist-get 'team session)))
+                                   (list (alist-get 'seat session)
                                   (alist-get 'provider session)
                                   (if (equal (alist-get 'status session) "exited")
-                                      (propertize (concat "exited:" (alist-get 'exit-code session)) 'face 'warning)
-                                    (propertize "running" 'face 'success)))
-                                   (when agent-rig--show-all
+                                      (propertize (concat "○ exited:" (alist-get 'exit-code session)) 'face 'warning)
+                                    (propertize "● running" 'face 'success)))
+                                   (when show-project
                                      (list (abbreviate-file-name (alist-get 'directory session))))))) visible))
     (setq mode-line-process (format " [%d agents | %s]" (length visible)
                                     (if agent-rig--show-all "all projects" "this project")))
     (tabulated-list-print t)
+    (let ((inhibit-read-only t)
+          (running (cl-count "running" visible :key (lambda (item) (alist-get 'status item)) :test #'equal)))
+      (goto-char (point-min))
+      (insert (propertize "\n  AGENT RIG" 'face 'agent-rig-title)
+              (propertize (concat "  /  " (if agent-rig--show-all "ALL PROJECTS"
+                                           (file-name-nondirectory
+                                            (directory-file-name (or agent-rig--project-directory default-directory)))))
+                          'face 'agent-rig-section)
+              "\n")
+      (insert (format "  %d seats  ·  " (length visible))
+              (propertize (format "%d running" running) 'face 'success)
+              (propertize (format "  ·  %d exited\n\n" (- (length visible) running)) 'face 'shadow))
+      (unless (string-empty-p agent-rig--filter)
+        (insert (propertize (format "  FILTER  %s   [Esc] clear\n\n" agent-rig--filter) 'face 'agent-rig-key)))
+      (insert (propertize
+               (concat "  " (mapconcat (lambda (column)
+                                        (agent-rig--fit (upcase (car column)) (max 7 (cadr column))))
+                                      (append tabulated-list-format nil) " ") "\n")
+               'face 'agent-rig-section)))
+    (setq header-line-format
+          (propertize "  RET open   s prompt   n new   / filter   : commands   ? actions" 'face 'agent-rig-key))
     (goto-char (point-min))
-    (when agent-rig--selected-session
-      (while (and (not (eobp))
-                  (not (equal (tabulated-list-get-id) agent-rig--selected-session)))
-        (forward-line 1))
-      (when (eobp) (goto-char (point-min))))
+    (while (and (not (eobp))
+                (if agent-rig--selected-session
+                    (not (equal (tabulated-list-get-id) agent-rig--selected-session))
+                  (not (tabulated-list-get-id))))
+      (forward-line 1))
+    (when (eobp)
+      (goto-char (point-min))
+      (while (and visible (not (tabulated-list-get-id)) (not (eobp))) (forward-line 1)))
     (setq agent-rig--selected-session (tabulated-list-get-id))
     (save-excursion
       (goto-char (point-max))
@@ -490,8 +572,12 @@
         (insert "\n")
         (setq agent-rig--details-end (point-marker))
         (insert "\n")
-        (agent-rig--insert-actions '("Open" "Create" "Send" "Manage" "View"))
-        (insert (propertize "\n  j/k or arrows: move   ? all actions   q close panel\n" 'face 'shadow))))
+        (dolist (keys '(("RET" "s" "h") ("n" "t" "?")))
+          (insert "  ")
+          (dolist (key keys)
+            (insert (agent-rig--action-string (assoc key agent-rig--commands)) "    "))
+          (insert "\n"))
+        (insert (propertize "\n  j/k navigate  ·  f focus  ·  q back\n" 'face 'shadow))))
     (agent-rig--selection-changed)
     (set-buffer-modified-p nil)
     (force-mode-line-update)))
@@ -503,11 +589,21 @@
              (markerp agent-rig--details-end) (marker-position agent-rig--details-end))
     (let* ((session (cl-find agent-rig--selected-session agent-rig--visible-sessions
                              :key (lambda (item) (alist-get 'session item)) :test #'equal))
-           (text (if session
-                     (format "  Selected: %s/%s · %s · %s\n  %s\n" (alist-get 'team session)
-                             (alist-get 'seat session) (alist-get 'provider session)
-                             (alist-get 'status session) (abbreviate-file-name (alist-get 'directory session)))
-                   "  Select an agent above; actions apply to that seat.\n")))
+           (text (concat
+                  (mapconcat
+                   #'identity
+                   (agent-rig--panel
+                    "SELECTED AGENT"
+                    (if session
+                        (list (propertize (format "%s/%s" (alist-get 'team session) (alist-get 'seat session))
+                                          'face 'bold)
+                              (format "%s  ·  Process %s%s" (alist-get 'provider session) (alist-get 'status session)
+                                      (if (equal (alist-get 'status session) "exited")
+                                          (format " (%s)" (alist-get 'exit-code session)) ""))
+                              (propertize (abbreviate-file-name (alist-get 'directory session))
+                                          'face 'shadow 'help-echo (alist-get 'directory session)))
+                      '("Select an agent above." "n  Create an agent    t  Launch a team"))
+                    (agent-rig--width)) "\n") "\n")))
       (unless (equal text (buffer-substring-no-properties agent-rig--details-start agent-rig--details-end))
         (save-excursion
           (let ((inhibit-read-only t))
@@ -544,26 +640,51 @@
   (agent-rig--invoke (button-get button 'agent-rig-command)))
 
 (defun agent-rig--insert-actions (groups)
-  (dolist (group groups)
-    (insert (propertize (format "  %-7s " group) 'face 'font-lock-keyword-face))
-    (let ((width (max 45 (- (window-body-width (get-buffer-window (current-buffer))) 2))))
-      (dolist (entry agent-rig--commands)
-        (when (and (equal (nth 3 entry) group)
-                   (not (and (derived-mode-p 'agent-rig-actions-mode)
-                             (member (car entry) '("?" "q")))))
-          (let ((label (format "%s %s" (car entry) (nth 2 entry))))
-            (when (> (+ (current-column) (string-width label) 3) width)
-              (insert "\n          "))
-            (insert-text-button label 'agent-rig-command (cadr entry)
-                                'action #'agent-rig--button-action 'follow-link t
-                                'help-echo (format "Run %s" (cadr entry)))
-            (insert "   ")))))
-    (insert "\n")))
+  (let* ((width (agent-rig--width))
+         (columns (if (>= width 70) 2 1))
+         (panel-width (if (= columns 2) (/ (- width 2) 2) width)))
+    (while groups
+      (let* ((row (cl-subseq groups 0 (min columns (length groups))))
+             (contents (mapcar
+                        (lambda (group)
+                          (mapcar #'agent-rig--action-string
+                                  (cl-remove-if-not (lambda (entry) (equal (nth 3 entry) group))
+                                                    agent-rig--commands))) row))
+             (height (apply #'max (mapcar #'length contents)))
+             (panels (cl-mapcar
+                      (lambda (group lines)
+                        (agent-rig--panel (upcase group)
+                                          (append lines (make-list (- height (length lines)) "")) panel-width))
+                      row contents)))
+        (dotimes (line (+ height 2))
+          (insert (mapconcat (lambda (panel) (nth line panel)) panels "  ") "\n"))
+        (insert "\n"))
+      (setq groups (nthcdr columns groups)))))
 
 (defun agent-rig-toggle-projects ()
   (interactive)
   (setq agent-rig--show-all (not agent-rig--show-all))
   (agent-rig-refresh))
+
+(defun agent-rig-filter ()
+  (interactive)
+  (setq agent-rig--filter (read-string "Filter agents: " nil nil agent-rig--filter))
+  (agent-rig-refresh))
+
+(defun agent-rig-clear-filter ()
+  (interactive)
+  (setq agent-rig--filter "")
+  (agent-rig-refresh))
+
+(defun agent-rig-command-palette ()
+  (interactive)
+  (let* ((choices (mapcar (lambda (entry)
+                            (cons (format "%-9s %s  [%s]" (nth 3 entry) (nth 2 entry) (car entry))
+                                  (cadr entry)))
+                          (cl-remove-if (lambda (entry) (eq (cadr entry) #'agent-rig-command-palette))
+                                        agent-rig--commands)))
+         (choice (completing-read "Rig command: " choices nil t)))
+    (agent-rig--invoke (cdr (assoc choice choices)))))
 
 (defun agent-rig--cancel-refresh ()
   (when (timerp agent-rig--refresh-timer) (cancel-timer agent-rig--refresh-timer))
@@ -592,6 +713,8 @@
     ("R" agent-rig-restore "restore" "Recovery")
     ("i" agent-rig-set-conversation "conversation ID" "Recovery")
     ("a" agent-rig-toggle-projects "all/project" "View")
+    ("/" agent-rig-filter "filter agents" "View")
+    (":" agent-rig-command-palette "find command" "View")
     ("g" agent-rig-refresh "refresh" "View")
     ("f" agent-rig-toggle-focus "focus" "View")
     ("C-c C-o" agent-rig-return-to-code "return to code" "Navigate")
@@ -630,23 +753,25 @@
       (setq-local agent-rig--project-directory directory)
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (propertize "Agent Rig actions\n" 'face 'bold)
-                "Press a key or click an action. q / Escape returns.\n\n")
+        (insert (propertize "AGENT RIG  /  ACTIONS\n" 'face 'agent-rig-title)
+                (propertize "q / Esc returns  ·  : finds a command\n\n" 'face 'shadow))
         (when target
           (insert (propertize (format "Target: %s/%s [%s]\n\n" (alist-get 'team target)
                                        (alist-get 'seat target) (alist-get 'provider target)) 'face 'bold)))
-        (agent-rig--insert-actions '("Open" "Create" "Send" "Manage" "Recovery" "View" "Navigate"))
-        (insert (propertize "\nRuntime\n" 'face 'bold))
-        (insert (format "tmux: %s\nTerminal: %s\n" (or (executable-find agent-rig-tmux-program) "MISSING")
-                        (if (locate-library "vterm") "vterm" "built-in term")))
-        (dolist (provider agent-rig-providers)
-          (insert (format "%s: %s\n" (car provider)
-                          (condition-case err (car (agent-rig-provider-command (car provider)))
-                            (error (error-message-string err))))))
-        (insert "\nPrompts: C-c C-c pastes; submit in the agent terminal.\nStop requires confirmation. Closing a panel leaves agents running.\n"))
+        (agent-rig--insert-actions '("Open" "Create" "Send" "Recovery" "Manage" "View"))
+        (insert (propertize "[q / Esc] back     [C-c C-o] code\n" 'face 'agent-rig-key))
+        (insert (propertize (format "tmux %s  ·  %s  ·  %d/%d CLIs found\n"
+                                    (if (executable-find agent-rig-tmux-program) "available" "MISSING")
+                                    (if (locate-library "vterm") "vterm" "term")
+                                    (cl-count-if (lambda (provider)
+                                                   (ignore-errors (agent-rig-provider-command (car provider))))
+                                                 agent-rig-providers)
+                                    (length agent-rig-providers)) 'face 'shadow)))
       (goto-char (point-min))
       (set-buffer-modified-p nil)
-      (agent-rig--display (current-buffer)))))
+      (agent-rig--display (current-buffer))
+      (when (eq (window-parameter (selected-window) 'window-side) 'bottom)
+        (fit-window-to-buffer nil (floor (* 0.8 (frame-height))) 10)))))
 
 (defvar agent-rig-mode-map
   (let ((map (make-sparse-keymap)))
@@ -657,6 +782,7 @@
       (define-key map (kbd key) #'agent-rig-next-row))
     (dolist (key '("k" "p" "<up>" "C-p"))
       (define-key map (kbd key) #'agent-rig-previous-row))
+    (define-key map (kbd "<escape>") #'agent-rig-clear-filter)
     map))
 
 (define-derived-mode agent-rig-mode tabulated-list-mode "Agent Rig"
@@ -666,6 +792,7 @@
   (setq tabulated-list-sort-key '("Team" . nil))
   (setq-local truncate-lines t)
   (setq-local mode-line-buffer-identification '("Rig  RET open · n new · ? actions"))
+  (setq-local hl-line-face 'agent-rig-selection)
   (hl-line-mode 1)
   (add-hook 'post-command-hook #'agent-rig--selection-changed nil t)
   (add-hook 'tabulated-list-revert-hook #'agent-rig-refresh nil t)
