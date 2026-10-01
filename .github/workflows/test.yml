@@ -1,0 +1,13 @@
+name: test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  ert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y emacs-nox tmux
+      - run: emacs -Q --batch -L . -l test/agent-rig-test.el -f ert-run-tests-batch-and-exit
