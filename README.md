@@ -96,3 +96,11 @@ To explicitly run the suite locally:
 ```sh
 emacs -Q --batch -L . -l test/agent-rig-test.el -f ert-run-tests-batch-and-exit
 ```
+
+### Recovery
+
+From the dashboard, `i` records the exact native conversation ID for the selected seat. `S` saves all seats in the current project; `R` restores a snapshot. Existing seats are left untouched. Seats with an ID request the provider's native resume command; seats without an ID start fresh after confirmation. Resume is reported as requested, not as verified continuity: inspect the provider terminal for its result.
+
+Snapshots contain project paths, seat identities, providers, and optional conversation IDs, never executable commands. They are written atomically with mode 0600 under `agent-rig-state-directory` (default `~/.emacs.d/agent-rig/`). Restoration validates the whole snapshot before launching anything, reports each seat separately, and retains the latest results in `last-restore.json`. It does not replay prompts or restore unsent provider input.
+
+In an agent terminal, `C-c C-d` detaches the Emacs client while leaving the agent alive. Use `C-c a` to reach Emacs commands through the dashboard; terminal modes can forward ordinary Emacs shortcuts to the provider.

@@ -304,3 +304,48 @@
         (agent-rig-refresh)
         (should (equal (tabulated-list-get-id) "one"))
         (should-not display-line-numbers)))))
+
+(ert-deftest agent-rig-resume-requires-explicit-safe-id ()
+  (let ((agent-rig-providers '((codex :command ("sh") :resume ("resume")))))
+    (should (equal (cdr (agent-rig-provider-resume-command 'codex "session-123"))
+                   '("resume" "session-123")))
+    (dolist (id '("" "--last" "a\nb" "a b"))
+      (should-error (agent-rig-provider-resume-command 'codex id) :type 'user-error))))
+
+(ert-deftest agent-rig-snapshot-validates-every-seat-before-starting ()
+  (let* ((agent-rig-state-directory (make-temp-file "agent-rig-state-" t))
+         (file (expand-file-name "project.json" agent-rig-state-directory))
+         (directory (file-name-as-directory (file-truename temporary-file-directory)))
+         (seat (agent-rig--metadata "team" "one" 'codex directory))
+         launched)
+    (unwind-protect
+        (progn
+          (agent-rig-state--write file `((version . 1) (project . ,directory)
+                                         (seats . ,(vector seat seat))))
+          (cl-letf (((symbol-function 'agent-rig-tmux-start)
+                     (lambda (&rest _) (setq launched t))))
+            (should-error (agent-rig-restore file) :type 'user-error)
+            (should-not launched)))
+      (delete-directory agent-rig-state-directory t))))
+
+(ert-deftest agent-rig-snapshot-survives-server-loss-and-restore-is-idempotent ()
+  (agent-rig-test-with-server
+   (let* ((agent-rig-state-directory (make-temp-file "agent-rig-state-" t))
+          (agent-rig-providers '((fixture :command ("sh" "-c" "sleep 30"))))
+          (agent-rig--project-directory temporary-file-directory)
+          file)
+     (unwind-protect
+         (progn
+           (agent-rig-start "team" "one" 'fixture temporary-file-directory)
+           (setq file (agent-rig-save))
+           (should (= (logand (file-modes file) #o777) #o600))
+           (agent-rig-tmux--run "kill-server")
+           (agent-rig-test-wait (lambda () (null (agent-rig-tmux-sessions))))
+           (cl-letf (((symbol-function 'agent-rig--display) #'ignore))
+             (should (equal (alist-get 'result (car (agent-rig-restore file)))
+                            "fresh conversation launched"))
+             (should (equal (alist-get 'result (car (agent-rig-restore file)))
+                            "already present; unchanged")))
+           (should (= (length (agent-rig-tmux-sessions)) 1))
+           (should (file-exists-p (expand-file-name "last-restore.json" agent-rig-state-directory))))
+       (delete-directory agent-rig-state-directory t)))))

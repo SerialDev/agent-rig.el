@@ -5,6 +5,7 @@
 (require 'term)
 (require 'agent-rig-providers)
 (require 'agent-rig-tmux)
+(require 'agent-rig-state)
 
 (defvar agent-rig-teams
   '(("pair" ("implementer" codex) ("reviewer" claude-code))
@@ -256,7 +257,13 @@
     (unless (equal (alist-get 'status session) "exited")
       (user-error "Only exited agents can be restarted"))
     (when (yes-or-no-p "Start a fresh provider conversation in this seat? ")
-      (agent-rig-tmux--run "respawn-pane" "-t" (alist-get 'pane session))
+      (let ((command (agent-rig-provider-command (intern (alist-get 'provider session))))
+            (metadata (assq-delete-all 'conversation (agent-rig-state--seat session))))
+        (agent-rig-tmux--run "respawn-pane" "-t" (alist-get 'pane session)
+                             "-c" (alist-get 'directory session)
+                             (concat "exec " (mapconcat #'shell-quote-argument command " ")))
+        (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane session)
+                             "@agent-rig" (agent-rig-tmux--encode metadata)))
       (agent-rig-open session))))
 
 (defvar agent-rig-prompt-mode-map
@@ -398,6 +405,9 @@
     ("b" agent-rig-broadcast "Broadcast to team")
     ("o" agent-rig-capture "Capture output")
     ("r" agent-rig-restart "Restart exited agent")
+    ("S" agent-rig-save "Save project seats")
+    ("R" agent-rig-restore "Restore saved seats")
+    ("i" agent-rig-set-conversation "Record provider conversation ID")
     ("k" agent-rig-stop "Stop agent")
     ("a" agent-rig-toggle-projects "Toggle this project / all projects")
     ("g" agent-rig-refresh "Refresh")
