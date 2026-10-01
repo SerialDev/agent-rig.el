@@ -47,7 +47,7 @@
 
 (ert-deftest agent-rig-discovery-rejects-corrupt-metadata ()
   (cl-letf (((symbol-function 'agent-rig-tmux--call)
-             (lambda (&rest _) '(0 . "ar-test\t%1\t0\t\tinvalid!"))))
+             (lambda (&rest _) '(0 . "ar-test|%1|0||invalid!"))))
     (should-not (agent-rig-tmux-sessions))))
 
 (ert-deftest agent-rig-discovery-does-not-hide-server-errors ()
@@ -98,7 +98,7 @@
          (encoded (agent-rig-tmux--encode metadata)))
     (should (equal metadata (agent-rig-tmux--decode encoded)))
     (cl-letf (((symbol-function 'agent-rig-tmux--call)
-               (lambda (&rest _) (cons 0 (concat "ar-test\t%1\t0\t\t" encoded)))))
+               (lambda (&rest _) (cons 0 (concat "ar-test|%1|0||" encoded)))))
       (should (= 1 (length (agent-rig-tmux-sessions)))))))
 
 (ert-deftest agent-rig-team-rolls-back-only-new-sessions ()

@@ -34,12 +34,12 @@
 (defun agent-rig-tmux-sessions ()
   (let ((result (agent-rig-tmux--call
                  "list-panes" "-a" "-F"
-                 "#{session_name}\t#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{@agent-rig}"))
+                 "#{session_name}|#{pane_id}|#{pane_dead}|#{pane_dead_status}|#{@agent-rig}"))
         sessions)
     (cond
      ((equal (car result) 0)
       (dolist (line (split-string (cdr result) "\n" t))
-        (let* ((fields (split-string line "\t"))
+        (let* ((fields (split-string line "|"))
                (encoded (nth 4 fields)))
           (when (and encoded (not (string-empty-p encoded)))
             (condition-case nil
