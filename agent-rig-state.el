@@ -16,7 +16,7 @@
           (rename-file temporary file t))
       (when (file-exists-p temporary) (delete-file temporary)))))
 
-(defun agent-rig-state--seat (record)
+(defun agent-rig-state--seat (record &optional live)
   (unless (and (listp record)
                (cl-every (lambda (key) (stringp (alist-get key record)))
                          '(team seat provider directory)))
@@ -31,6 +31,8 @@
                    (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9_-]*\\'" conversation))
         (user-error "Invalid saved conversation ID"))
       (push (cons 'conversation conversation) metadata))
+    (when (and live (alist-get 'observer record))
+      (push (cons 'observer (alist-get 'observer record)) metadata))
     metadata))
 
 (defun agent-rig-save ()
@@ -55,7 +57,7 @@
   (let* ((session (agent-rig--select))
          (conversation (read-string "Exact provider conversation ID: " nil nil
                                     (alist-get 'conversation session)))
-         (metadata (agent-rig-state--seat session)))
+         (metadata (agent-rig-state--seat session t)))
     (agent-rig-provider-resume-command (intern (alist-get 'provider session)) conversation)
     (setf (alist-get 'conversation metadata) conversation)
     (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane session)

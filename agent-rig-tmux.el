@@ -2,6 +2,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'agent-rig-claude)
 
 (defvar agent-rig-tmux-program "tmux")
 (defvar agent-rig-tmux-socket "agent-rig")
@@ -65,12 +66,15 @@
                                  '(team seat directory))))))
          (directory (alist-get 'directory metadata))
          (target (concat "=" session))
-         pane)
+         pane observation)
     (setq pane (agent-rig-tmux--run "new-session" "-d" "-P" "-F" "#{pane_id}"
                                    "-s" session "-c" directory
                                    "exec /bin/sleep 2147483647"))
     (condition-case err
         (progn
+          (let ((prepared (agent-rig-claude-prepare metadata command)))
+            (setq metadata (car prepared) command (cdr prepared))
+            (when (alist-get 'observer metadata) (setq observation metadata)))
           (agent-rig-tmux--run "set-option" "-w" "-t" pane "remain-on-exit" "on")
           (agent-rig-tmux--run "set-option" "-p" "-t" pane "@agent-rig"
                                (agent-rig-tmux--encode metadata))
@@ -79,6 +83,7 @@
           session)
       (error
        (ignore-errors (agent-rig-tmux--run "kill-session" "-t" target))
+       (when observation (ignore-errors (agent-rig-claude-cleanup observation)))
        (signal (car err) (cdr err))))))
 
 (defun agent-rig-tmux-unmanaged ()

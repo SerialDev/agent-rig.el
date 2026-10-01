@@ -4,7 +4,7 @@
 (defun agent-rig-worktree-start (team seat provider project directory branch)
   (interactive
    (let* ((project (agent-rig--directory))
-          (provider (intern (completing-read "Provider: " agent-rig-providers nil t)))
+          (provider (agent-rig-read-provider))
           (team (read-string "Team: " nil nil agent-rig--last-team))
           (seat (read-string "Seat: " nil nil (symbol-name provider))))
      (list team seat provider project

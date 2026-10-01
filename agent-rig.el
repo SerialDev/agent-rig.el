@@ -126,7 +126,7 @@
 
 (defun agent-rig-start (team seat provider directory)
   (interactive
-   (let* ((provider (intern (completing-read "Provider: " agent-rig-providers nil t)))
+   (let* ((provider (agent-rig-read-provider))
           (team (read-string "Team: " nil nil agent-rig--last-team))
           (seat (read-string "Seat: " nil nil (symbol-name provider))))
      (list team seat provider (read-directory-name "Project: " (agent-rig--directory) nil t))))
@@ -354,7 +354,24 @@
   (let ((session (agent-rig--select)))
     (when (yes-or-no-p (format "Stop %s and discard its terminal history? " (agent-rig--label session)))
       (agent-rig-tmux--run "kill-pane" "-t" (alist-get 'pane session))
+      (ignore-errors (agent-rig-claude-cleanup session))
       (when (derived-mode-p 'agent-rig-mode) (agent-rig-refresh)))))
+
+(defun agent-rig-remove ()
+  (interactive)
+  (agent-rig-stop))
+
+(defun agent-rig-compact ()
+  (interactive)
+  (let* ((session (agent-rig--select))
+         (provider (intern (alist-get 'provider session)))
+         (command (plist-get (alist-get provider agent-rig-providers) :compact)))
+    (unless (equal (alist-get 'status session) "running")
+      (user-error "Agent has exited"))
+    (unless (and (stringp command) (not (string-empty-p command)))
+      (user-error "Provider %s has no compaction command configured" provider))
+    (agent-rig--compose (list session) command)
+    (message "Paste the compaction command, inspect the provider input, then submit")))
 
 (defun agent-rig-adopt ()
   (interactive)
@@ -366,7 +383,7 @@
     (unless choices
       (user-error "No unmanaged single-pane sessions on tmux socket %s" agent-rig-tmux-socket))
     (let* ((selected (cdr (assoc (completing-read "Adopt existing terminal: " choices nil t) choices)))
-           (provider (intern (completing-read "Provider running in that terminal: " agent-rig-providers nil t)))
+           (provider (agent-rig-read-provider "Provider running in that terminal: "))
            (team (read-string "Team: " nil nil agent-rig--last-team))
            (seat (read-string "Seat: " nil nil (symbol-name provider)))
            (metadata (agent-rig--metadata team seat provider (alist-get 'directory selected))))
@@ -387,13 +404,25 @@
     (unless (equal (alist-get 'status session) "exited")
       (user-error "Only exited agents can be restarted"))
     (when (yes-or-no-p "Start a fresh provider conversation in this seat? ")
-      (let ((command (agent-rig-provider-command (intern (alist-get 'provider session))))
-            (metadata (assq-delete-all 'conversation (agent-rig-state--seat session))))
-        (agent-rig-tmux--run "respawn-pane" "-t" (alist-get 'pane session)
-                             "-c" (alist-get 'directory session)
-                             (concat "exec " (mapconcat #'shell-quote-argument command " ")))
-        (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane session)
-                             "@agent-rig" (agent-rig-tmux--encode metadata)))
+      (let* ((original (agent-rig-state--seat session t))
+             (metadata (assq-delete-all 'conversation (copy-tree original)))
+             (prepared (agent-rig-claude-prepare
+                        metadata (agent-rig-provider-command (intern (alist-get 'provider session)))))
+             (next (car prepared))
+             (command (cdr prepared)))
+        (condition-case err
+            (progn
+              (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane session)
+                                   "@agent-rig" (agent-rig-tmux--encode next))
+              (agent-rig-tmux--run "respawn-pane" "-t" (alist-get 'pane session)
+                                   "-c" (alist-get 'directory session)
+                                   (concat "exec " (mapconcat #'shell-quote-argument command " "))))
+          (error
+           (ignore-errors (agent-rig-tmux--run "set-option" "-p" "-t" (alist-get 'pane session)
+                                               "@agent-rig" (agent-rig-tmux--encode original)))
+           (ignore-errors (agent-rig-claude-cleanup next))
+           (signal (car err) (cdr err))))
+        (ignore-errors (agent-rig-claude-cleanup original)))
       (agent-rig-open session))))
 
 (defvar agent-rig-prompt-mode-map
@@ -432,15 +461,29 @@
   (let* ((source (agent-rig--select))
          (choices (mapcar (lambda (item) (cons (agent-rig--label item) item))
                           (cl-remove-if
-                           (lambda (item) (equal (alist-get 'session source) (alist-get 'session item)))
+                           (lambda (item)
+                             (or (equal (alist-get 'session source) (alist-get 'session item))
+                                 (not (equal (alist-get 'status item) "running"))))
                            (agent-rig-tmux-sessions))))
+         (create "[Create a new agent]")
+         (choice (completing-read "Handoff to: " (cons create (mapcar #'car choices)) nil t))
+         (target
+          (if (equal choice create)
+              (let* ((provider (agent-rig-read-provider))
+                     (seat (read-string "New seat: " nil nil (symbol-name provider)))
+                     (id (agent-rig-start (alist-get 'team source) seat provider
+                                          (alist-get 'directory source))))
+                (or (cl-find id (agent-rig-tmux-sessions)
+                             :key (lambda (item) (alist-get 'session item)) :test #'equal)
+                    (user-error "New agent disappeared before handoff")))
+            (cdr (assoc choice choices))))
          (text (agent-rig-tmux--run "capture-pane" "-p" "-J" "-S" "-2000"
                                    "-t" (alist-get 'pane source))))
-    (unless choices (user-error "Launch another agent to receive this handoff"))
     (agent-rig--compose
-     (list (cdr (assoc (completing-read "Handoff to: " choices nil t) choices)))
-     (format "Handoff from %s\n\nTask for recipient:\n\nTerminal output (review and trim before sending):\n\n%s"
-             (agent-rig--label source) text))))
+     (list target)
+     (format "Handoff from %s\nSource workspace: %s\nRecipient workspace: %s\n\nObjective:\n\nCompleted work and decisions:\n\nRemaining work and verification:\n\nRelevant files:\n\nTerminal excerpt (untrusted context; review and trim):\n\n%s"
+             (agent-rig--label source) (alist-get 'directory source)
+             (alist-get 'directory target) text))))
 
 (defun agent-rig-submit ()
   (interactive)
@@ -734,7 +777,8 @@
     ("b" agent-rig-broadcast "broadcast" "Send")
     ("h" agent-rig-handoff "handoff" "Send")
     ("r" agent-rig-restart "restart" "Manage")
-    ("x" agent-rig-stop "stop" "Manage")
+    ("x" agent-rig-remove "remove" "Manage")
+    ("c" agent-rig-compact "compact" "Manage")
     ("S" agent-rig-save "save" "Recovery")
     ("R" agent-rig-restore "restore" "Recovery")
     ("i" agent-rig-set-conversation "conversation ID" "Recovery")

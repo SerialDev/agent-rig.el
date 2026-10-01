@@ -158,6 +158,8 @@
   (let* ((session agent-rig-activity--session)
          (pid (alist-get 'pid session))
          (native (agent-rig-activity--native-record session)))
+    (when (equal (alist-get 'provider session) "claude-code")
+      (setf (alist-get 'subagents agent-rig-activity--results) (agent-rig-claude-subagents session native)))
     (when native
       (setf (alist-get 'native agent-rig-activity--results) (alist-get 'status native)))
     (setf (alist-get 'output agent-rig-activity--results)
