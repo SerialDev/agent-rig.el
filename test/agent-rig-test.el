@@ -521,3 +521,18 @@
         (agent-rig-clear-filter)
         (should (= (length tabulated-list-entries) 2))
         (should (equal (tabulated-list-get-id) "two"))))))
+
+(ert-deftest agent-rig-activity-follows-descendants-not-siblings ()
+  (should (equal (mapcar #'car (agent-rig-activity--descendants
+                              "10" "30 20 0.0 00:01 worker\n10 1 0.0 00:10 codex\n40 1 0.0 00:10 daemon\n20 10 1.0 00:02 shell\n"))
+                 '("30" "20"))))
+
+(ert-deftest agent-rig-native-status-matches-exact-pid ()
+  (let ((text "[{\"pid\":12,\"status\":\"busy\"},{\"pid\":42,\"status\":\"idle\"}]"))
+    (should (equal (agent-rig-activity--claude-status "42" text) "idle"))
+    (should (string-match-p "unavailable" (agent-rig-activity--claude-status "43" text)))))
+
+(ert-deftest agent-rig-navigation-keys-work-in-each-view ()
+  (dolist (map (list agent-rig-mode-map agent-rig-terminal-map agent-rig-activity-mode-map))
+    (should (eq (lookup-key map (kbd "M-<left>")) #'agent-rig-overview))
+    (should (eq (lookup-key map (kbd "M-<right>")) #'agent-rig-open))))

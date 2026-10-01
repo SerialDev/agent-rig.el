@@ -102,3 +102,9 @@ For explicitly requested local validation:
 ```sh
 emacs -Q --batch -L . -l test/agent-rig-test.el -f ert-run-tests-batch-and-exit
 ```
+
+### Agent navigation and activity
+
+`M-left` returns from an agent terminal or activity view to the all-projects overview, clears any filter, and keeps that agent selected. `M-right` opens the selected agent terminal. Neither action stops the agent.
+
+Press `d` for the activity inspector: foreground command, pane PID, OS descendant processes with CPU and elapsed time, and recent terminal output. The visible inspector refreshes every three idle seconds; `g` refreshes immediately. Claude Code's native session status is queried asynchronously and matched by exact PID. Unsupported CLI versions or missing sessions report unavailable. OS children are not counted as subagents; shared daemons and in-process agent work cannot be inferred from a process tree. Codex/OpenCode native busy state and provider subagent counts are currently unavailable; the terminal output remains visible as evidence of what the provider reports.

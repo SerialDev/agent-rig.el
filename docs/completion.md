@@ -16,3 +16,5 @@ Objective: native Emacs management of terminal agents with Tiqsi init-lite integ
 | Validation | Package ERT matrix on distribution tmux and 3.7c; separate Tiqsi integration ERT with Hydra; syntax and whitespace checks locally, no local test suites |
 
 OpenCode accepted the live prompt but its configured provider returned a billing-related error. Agent Rig cannot establish successful model output until that account-side condition is resolved. Native conversation resume is implemented with explicit user-supplied IDs; the manager reports a request, not verified provider continuity. No real provider process was killed to test restoration: server-loss coverage uses disposable CI fixtures.
+
+The activity inspector adds exact-PID Claude status, foreground commands, descendant process snapshots, and terminal output. Meta-arrow navigation connects overview, terminal, and activity views. Regression coverage checks PID association, descendant isolation, and key bindings. Native Codex/OpenCode activity and subagent telemetry remain unsupported rather than being inferred from process existence.

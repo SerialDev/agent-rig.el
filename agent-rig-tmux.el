@@ -34,7 +34,7 @@
 (defun agent-rig-tmux-sessions ()
   (let ((result (agent-rig-tmux--call
                  "list-panes" "-a" "-F"
-                 "#{session_name}|#{pane_id}|#{pane_dead}|#{pane_dead_status}|#{@agent-rig}"))
+                 "#{session_name}|#{pane_id}|#{pane_dead}|#{pane_dead_status}|#{@agent-rig}|#{pane_pid}|#{pane_current_command}"))
         sessions)
     (cond
      ((equal (car result) 0)
@@ -51,7 +51,9 @@
                                   `((session . ,(nth 0 fields))
                                     (pane . ,(nth 1 fields))
                                     (status . ,(if (equal (nth 2 fields) "1") "exited" "running"))
-                                    (exit-code . ,(nth 3 fields)))) sessions)))
+                                    (exit-code . ,(nth 3 fields))
+                                    (pid . ,(nth 5 fields))
+                                    (command . ,(nth 6 fields)))) sessions)))
               (error (message "Ignoring invalid agent-rig metadata in %s" (car fields))))))))
      ((string-match-p "no server running\\|No such file or directory" (cdr result)) nil)
      (t (error "Cannot discover agents: %s" (cdr result))))

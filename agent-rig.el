@@ -9,6 +9,7 @@
 (require 'agent-rig-tmux)
 (require 'agent-rig-state)
 (require 'agent-rig-worktree)
+(require 'agent-rig-activity)
 
 (defface agent-rig-title
   '((((class color) (background dark)) (:foreground "#9bbfff" :weight bold :height 1.15))
@@ -223,8 +224,19 @@
           (alist-get 'team session) (alist-get 'seat session)
           (substring (secure-hash 'sha256 (concat agent-rig-tmux-socket (alist-get 'session session))) 0 6)))
 
+(defun agent-rig-overview ()
+  (interactive)
+  (let ((identity (or agent-rig--terminal-session agent-rig--selected-session)))
+    (with-current-buffer (get-buffer-create "*Agent Rig*")
+      (unless (derived-mode-p 'agent-rig-mode) (agent-rig-mode))
+      (setq agent-rig--selected-session identity agent-rig--filter "")
+      (goto-char (point-min)))
+    (agent-rig t)))
+
 (defvar agent-rig-terminal-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "M-<left>") #'agent-rig-overview)
+    (define-key map (kbd "M-<right>") #'agent-rig-open)
     (define-key map (kbd "C-c a") #'agent-rig)
     (define-key map (kbd "C-c C-s") #'agent-rig-send)
     (define-key map (kbd "C-c C-o") #'agent-rig-return-to-code)
@@ -240,7 +252,7 @@
     (setq-local agent-rig--terminal-session (alist-get 'session session))
     (setq-local agent-rig--project-directory (alist-get 'directory session))
     (setq-local header-line-format
-                (format "C-c a: agents | C-c C-o: code | C-c C-f: focus | %s/%s [%s]"
+                (format "M-←: all agents | C-c C-o: code | C-c C-f: focus | %s/%s [%s]"
                         (alist-get 'team session) (alist-get 'seat session) (alist-get 'provider session)))
     (use-local-map (make-composed-keymap agent-rig-terminal-map (current-local-map))))
   (agent-rig--display buffer))
@@ -552,7 +564,7 @@
                                       (append tabulated-list-format nil) " ") "\n")
                'face 'agent-rig-section)))
     (setq header-line-format
-          (propertize "  RET open   s prompt   n new   / filter   : commands   ? actions" 'face 'agent-rig-key))
+          (propertize "  M-→ open   d activity   s prompt   n new   / filter   : commands   ? actions" 'face 'agent-rig-key))
     (goto-char (point-min))
     (while (and (not (eobp))
                 (if agent-rig--selected-session
@@ -600,6 +612,9 @@
                               (format "%s  ·  Process %s%s" (alist-get 'provider session) (alist-get 'status session)
                                       (if (equal (alist-get 'status session) "exited")
                                           (format " (%s)" (alist-get 'exit-code session)) ""))
+                              (format "Command %s · PID %s · d activity"
+                                      (or (alist-get 'command session) "unknown")
+                                      (or (alist-get 'pid session) "unknown"))
                               (propertize (abbreviate-file-name (alist-get 'directory session))
                                           'face 'shadow 'help-echo (alist-get 'directory session)))
                       '("Select an agent above." "n  Create an agent    t  Launch a team"))
@@ -699,6 +714,9 @@
 
 (defconst agent-rig--commands
   '(("RET" agent-rig-open "terminal" "Open")
+    ("M-<left>" agent-rig-overview "all agents" "Navigate")
+    ("M-<right>" agent-rig-open "selected agent" "Navigate")
+    ("d" agent-rig-activity "activity" "Open")
     ("TAB" agent-rig-switch "switch" "Open")
     ("o" agent-rig-capture "output" "Open")
     ("n" agent-rig-start "agent" "Create")
