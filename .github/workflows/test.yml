@@ -1,0 +1,32 @@
+name: test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  ert:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tmux: [system, '3.7c']
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y emacs-nox tmux
+      - uses: actions/checkout@v4
+        if: matrix.tmux != 'system'
+        with:
+          repository: tmux/tmux
+          ref: ${{ matrix.tmux }}
+          path: tmux-src
+      - if: matrix.tmux != 'system'
+        run: |
+          sudo apt-get install -y automake autoconf bison libevent-dev libncurses-dev pkg-config
+          cd tmux-src
+          sh autogen.sh
+          ./configure --prefix="$RUNNER_TEMP/tmux"
+          make -j2
+          make install
+          echo "$RUNNER_TEMP/tmux/bin" >> "$GITHUB_PATH"
+      - run: emacs --version && tmux -V
+      - run: emacs -Q --batch -L . -l test/agent-rig-test.el -f ert-run-tests-batch-and-exit
