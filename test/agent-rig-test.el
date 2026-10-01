@@ -1,9 +1,15 @@
+;; -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'agent-rig)
 
 (defmacro agent-rig-test-with-server (&rest body)
   `(let ((agent-rig-tmux-socket (format "agent-rig-test-%s-%s" (emacs-pid) (random 1000000))))
-     (unwind-protect (progn ,@body)
+     (unwind-protect (condition-case failure (progn ,@body)
+                       (error
+                        (message "tmux inventory: %S"
+                                 (agent-rig-tmux--call "list-panes" "-a" "-F"
+                                                      "#{session_name}|#{pane_id}|#{pane_dead}|#{@agent-rig}"))
+                        (signal (car failure) (cdr failure))))
        (ignore-errors (agent-rig-tmux--run "kill-server")))))
 
 (defun agent-rig-test-wait (predicate)
@@ -85,7 +91,15 @@
                     (t "")))))
         (agent-rig-tmux-paste '((status . "running") (pane . "%1")) "line one\nline two")
         (should (equal (not (null (member "-S" paste)))
-                       (not (null (string-match-p "S" usage)))))))))
+                       (not (null (string-match-p "dprS" usage)))))))))
+
+(ert-deftest agent-rig-metadata-roundtrip ()
+  (let* ((metadata (agent-rig--metadata "team" "seat" 'codex temporary-file-directory))
+         (encoded (agent-rig-tmux--encode metadata)))
+    (should (equal metadata (agent-rig-tmux--decode encoded)))
+    (cl-letf (((symbol-function 'agent-rig-tmux--call)
+               (lambda (&rest _) (cons 0 (concat "ar-test\t%1\t0\t\t" encoded)))))
+      (should (= 1 (length (agent-rig-tmux-sessions)))))))
 
 (ert-deftest agent-rig-team-rolls-back-only-new-sessions ()
   (let ((agent-rig-teams '(("pair" ("one" valid) ("two" valid))))
